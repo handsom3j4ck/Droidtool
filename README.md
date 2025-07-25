@@ -69,12 +69,12 @@
 
 2. **Make the Script Executable**:
    ```bash
-   chmod +x droidtool.sh
+   chmod +x droidtool
    ```
 
 3. **Run the Script**:
    ```bash
-   ./droidtool.sh
+   ./droidtool
    ```
 
 The script will automatically check for and install `android-tools-adb` and `android-tools-fastboot` on supported systems (Debian/Ubuntu or Arch Linux). For other distributions, install these tools manually.
@@ -83,7 +83,7 @@ The script will automatically check for and install `android-tools-adb` and `and
 
 1. **Launch the Script**:
    ```bash
-   ./droidtool.sh
+   ./droidtool
    ```
 
 2. **Select Connection Method**:
