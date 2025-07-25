@@ -960,28 +960,32 @@ screenshot() {
 
 pull_file() {
   check_device_connection || return 1
-  read -r -p "Remote file path (e.g. /sdcard/file.txt): " src
+  read -r -p "Remote file path (e.g. /storage/emulated/0/file.txt): " src
   read -r -p "Local destination (default: .): " dst
   dst="${dst:-.}"
 
-  # Validate remote path (basic)
-  if [[ -z "$src" || "$src" == *"'"* || "$src" == '*'* ]]; then
-    echo -e "${RED}Invalid remote path${NC}"
+  # Validate remote path
+  if [[ -z "$src" ]]; then
+    echo -e "${RED}Remote path required.${NC}"
     return 1
   fi
 
-  echo -e "${GREEN}Pulling $src -> $dst...${NC}"
-  if ! adb pull "$src" "$dst"; then
-    echo -e "${RED}Failed to pull $src${NC}"
+  # Normalize /sdcard to /storage/emulated/0
+  local resolved_src="$src"
+  [[ "$resolved_src" == "/sdcard/"* ]] && resolved_src="/storage/emulated/0/${src#/sdcard/}"
+
+  echo -e "${GREEN}Pulling $resolved_src -> $dst...${NC}"
+  if ! adb pull "$resolved_src" "$dst"; then
+    echo -e "${RED}Failed to pull $resolved_src${NC}"
     return 1
   fi
-  echo -e "${GREEN}Successfully pulled: $src${NC}"
+  echo -e "${GREEN}Successfully pulled: $resolved_src${NC}"
 }
 
 push_file() {
   check_device_connection || return 1
   read -r -p "Local file path: " src
-  read -r -p "Remote destination (e.g. /sdcard/Download/): " dst
+  read -r -p "Remote destination (e.g. /storage/emulated/0/Download/): " dst
 
   if [[ ! -f "$src" ]]; then
     echo -e "${RED}Local file not found: $src${NC}"
@@ -993,12 +997,226 @@ push_file() {
     return 1
   fi
 
+  # Suggest using /storage/emulated/0 instead of /sdcard
+  if [[ "$dst" == "/sdcard/"* ]]; then
+    echo -e "${YELLOW}Note: /sdcard is a symlink. Using /storage/emulated/0 is more reliable.${NC}"
+  fi
+
   echo -e "${GREEN}Pushing $src -> $dst...${NC}"
   if ! adb push "$src" "$dst"; then
     echo -e "${RED}Failed to push $src${NC}"
     return 1
   fi
   echo -e "${GREEN}Successfully pushed: $src${NC}"
+}
+
+# Delete file from device (requires ADB connection)
+delete_file() {
+  check_device_connection || return 1
+
+  read -r -p "Remote file path to delete (e.g. /storage/emulated/0/Download/file.txt): " remote_path
+
+  # Validate input
+  if [[ -z "$remote_path" ]]; then
+    echo -e "${RED}No path provided.${NC}"
+    return 1
+  fi
+
+  # Basic sanitization
+  if ! [[ "$remote_path" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid characters in path: $remote_path${NC}"
+    return 1
+  fi
+
+  # Normalize path: replace /sdcard with /storage/emulated/0 for consistency
+  local resolved_path="$remote_path"
+  [[ "$resolved_path" == "/sdcard/"* ]] && resolved_path="/storage/emulated/0/${remote_path#/sdcard/}"
+
+  # Check if file exists
+  if ! adb shell "test -f '$resolved_path' && echo exists" | grep -q "exists"; then
+    if adb shell "test -d '$resolved_path'"; then
+      echo -e "${RED}Path is a directory. Use delete folder option instead.${NC}"
+    else
+      echo -e "${RED}File does not exist: $resolved_path${NC}"
+    fi
+    return 1
+  fi
+
+  # Confirm deletion
+  read -r -p "Are you sure you want to delete '$resolved_path'? (y/N): " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Deletion canceled.${NC}"
+    return 0
+  fi
+
+  # Attempt deletion
+  if adb shell rm -f "'$resolved_path'" 2>/dev/null; then
+    echo -e "${GREEN}Successfully deleted: $resolved_path${NC}"
+  else
+    echo -e "${RED}Failed to delete: $resolved_path${NC}"
+    return 1
+  fi
+}
+
+# Pull entire folder from device
+pull_folder() {
+  check_device_connection || return 1
+  read -r -p "Remote folder path (e.g. /storage/emulated/0/Download): " src
+  read -r -p "Local destination (default: .): " dst
+  dst="${dst:-.}"
+
+  if [[ -z "$src" ]]; then
+    echo -e "${RED}Remote path required.${NC}"
+    return 1
+  fi
+
+  # Normalize
+  local resolved_src="$src"
+  [[ "$resolved_src" == "/sdcard/"* ]] && resolved_src="/storage/emulated/0/${src#/sdcard/}"
+
+  echo -e "${GREEN}Pulling folder: $resolved_src -> $dst...${NC}"
+  if ! adb pull "$resolved_src" "$dst"; then
+    echo -e "${RED}Failed to pull folder: $resolved_src${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Successfully pulled folder: $resolved_src${NC}"
+}
+
+# Push entire folder to device
+push_folder() {
+  check_device_connection || return 1
+  read -r -p "Local folder path: " src
+  read -r -p "Remote destination (e.g. /storage/emulated/0/Download/): " dst
+
+  if [[ ! -d "$src" ]]; then
+    echo -e "${RED}Local folder not found: $src${NC}"
+    return 1
+  fi
+
+  if [[ -z "$dst" ]]; then
+    echo -e "${RED}Remote destination required${NC}"
+    return 1
+  fi
+
+  if [[ "$dst" == "/sdcard/"* ]]; then
+    echo -e "${YELLOW}Note: /sdcard is a symlink. Prefer /storage/emulated/0 for reliability.${NC}"
+  fi
+
+  echo -e "${GREEN}Pushing folder: $src -> $dst...${NC}"
+  if ! adb push "$src" "$dst"; then
+    echo -e "${RED}Failed to push folder: $src${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Successfully pushed folder: $src${NC}"
+}
+
+# Delete folder from device (with recursive option)
+delete_folder() {
+  check_device_connection || return 1
+
+  read -r -p "Remote folder path to delete (e.g. /storage/emulated/0/Download/MyFolder): " remote_path
+
+  # Validate input
+  if [[ -z "$remote_path" ]]; then
+    echo -e "${RED}No path provided.${NC}"
+    return 1
+  fi
+
+  # Sanitize
+  if ! [[ "$remote_path" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid characters in path: $remote_path${NC}"
+    return 1
+  fi
+
+  # Normalize path
+  local resolved_path="$remote_path"
+  [[ "$resolved_path" == "/sdcard/"* ]] && resolved_path="/storage/emulated/0/${remote_path#/sdcard/}"
+
+  # Check if folder exists
+  if ! adb shell "test -d '$resolved_path' && echo exists" | grep -q "exists"; then
+    if adb shell "test -f '$resolved_path'"; then
+      echo -e "${RED}Path is a file. Use delete file option instead.${NC}"
+    else
+      echo -e "${RED}Folder does not exist: $resolved_path${NC}"
+    fi
+    return 1
+  fi
+
+  # Confirm
+  read -r -p "Delete folder and all contents '$resolved_path'? (y/N): " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Deletion canceled.${NC}"
+    return 0
+  fi
+
+  # Delete
+  if adb shell rm -rf "'$resolved_path'" 2>/dev/null; then
+    echo -e "${GREEN}Successfully deleted folder: $resolved_path${NC}"
+  else
+    echo -e "${RED}Failed to delete folder: $resolved_path${NC}"
+    return 1
+  fi
+}
+
+# Search for folders on device
+find_folder() {
+  check_device_connection || return 1
+  read -r -p "Enter folder name to search (use * for wildcard, e.g. '*Music*'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No folder name provided.${NC}"
+    return 1
+  fi
+
+  echo -e "${GREEN}Searching for folders matching: $fname${NC}"
+  echo -e "${GREEN}In: /storage/emulated/0, /sdcard, /Download, /DCIM, /Documents${NC}"
+
+  local search_paths="/storage/emulated/0 /sdcard /Download /DCIM /Documents"
+
+  local results
+  results=$(adb shell "for path in $search_paths; do
+                      if [ -d \"\$path\" ]; then
+                        find \"\$path\" -name '$fname' -type d 2>/dev/null
+                      fi
+                    done" | tr -d '\r')
+
+  if [[ -n "$results" ]]; then
+    echo "$results"
+    local count=$(echo "$results" | wc -l)
+    echo -e "${GREEN}Search complete. Found $count folder(s).${NC}"
+  else
+    echo -e "${YELLOW}No folders found matching '$fname' in common storage directories.${NC}"
+  fi
+
+  read -r -p "Press Enter to continue..."
+}
+
+search_device_files() {
+  check_device_connection || return 1
+  read -r -p "Enter filename to search (use * for wildcard, e.g. '*.mp4'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No filename provided.${NC}"
+    return 1
+  fi
+
+  echo -e "${GREEN}Searching for files matching: $fname${NC}"
+  local search_paths="/storage/emulated/0 /sdcard /Download /DCIM /Documents"
+
+  local results
+  results=$(adb shell "for path in $search_paths; do
+                      if [ -d \"\$path\" ]; then
+                        find \"\$path\" -name '$fname' -type f 2>/dev/null
+                      fi
+                    done" | tr -d '\r')
+
+  if [[ -n "$results" ]]; then
+    echo "$results"
+    local count=$(echo "$results" | wc -l)
+    echo -e "${GREEN}Search complete. Found $count file(s).${NC}"
+  else
+    echo -e "${YELLOW}No files found matching '$fname'.${NC}"
+  fi
+
+  read -r -p "Press Enter to continue..."
 }
 
 # Requires root access
@@ -1204,8 +1422,9 @@ main_menu() {
     echo "5) Reboot & Sideload"
     echo "6) Developer Tools"
     echo "7) Custom Settings"
-    echo "8) Exit"
-    read -r -p "Select category (1-8): " cat
+    echo "8) Utilities"
+    echo "9) Exit"
+    read -r -p "Select category (1-9): " cat
     case $cat in
       1) category_device_info ;;
       2) category_app_mgmt ;;
@@ -1214,7 +1433,8 @@ main_menu() {
       5) category_reboot ;;
       6) category_dev_tools ;;
       7) custom_settings_menu ;;
-      8) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
+      8) category_utilities ;;
+      9) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1307,12 +1527,24 @@ category_files() {
     echo -e "${GREEN}\n File Management:${NC}"
     echo "1) Pull file from device"
     echo "2) Push file to device"
-    echo "3) Back to main menu"
-    read -r -p "Choose (1-3): " c
+    echo "3) Delete file from device"
+    echo "4) Pull folder from device"
+    echo "5) Push folder to device"
+    echo "6) Delete folder from device"
+    echo "7) Search for files on device"
+    echo "8) Search for folders on device"
+    echo "9) Back to main menu"
+    read -r -p "Choose (1-9): " c
     case $c in
       1) pull_file ;;
       2) push_file ;;
-      3) break ;;
+      3) delete_file ;;
+      4) pull_folder ;;
+      5) push_folder ;;
+      6) delete_folder ;;
+      7) search_device_files ;;
+      8) find_folder ;;
+      9) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
