@@ -63,7 +63,7 @@
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/your-username/droidtool.git
+   git clone https://github.com/handsom3j4ck/Droidtool.git
    cd droidtool
    ```
 
