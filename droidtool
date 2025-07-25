@@ -653,7 +653,8 @@ disable_bloatware() {
   done
 
   echo
-  read -r -p "Press Enter
+  read -r -p "Press Enter to continue..." _
+}  # ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←← CLOSE disable_bloatware()
 
 # === Backup & Restore ===
 apps_backup_restore_tool() {
