@@ -277,17 +277,33 @@ install_apk_folder() {
 }
 
 uninstall_app() {
-  read -r -p "Package name: " pkg
+  check_device_connection || return 1
+
+  echo -e "${GREEN}Installed apps:${NC}"
+  adb shell pm list packages | sed 's/package://g' | tr -d '\r' || {
+    echo -e "${RED}Failed to list packages${NC}"
+    return 1
+  }
+
+  echo
+  read -r -p "Package name to uninstall: " pkg
+
   if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
     echo -e "${RED}Invalid package name: $pkg${NC}"
     return 1
   fi
-  check_device_connection || return 1
+
   if ! adb shell pm list packages | grep -q "package:$pkg"; then
     echo -e "${RED}Package not found: $pkg${NC}"
     return 1
   fi
-  adb uninstall "$pkg" || { echo -e "${RED}Failed to uninstall $pkg${NC}"; return 1; }
+
+  adb uninstall "$pkg" || {
+    echo -e "${RED}Failed to uninstall $pkg${NC}"
+    return 1
+  }
+
+  echo -e "${GREEN}Successfully uninstalled $pkg${NC}"
 }
 
 batch_uninstall() {
