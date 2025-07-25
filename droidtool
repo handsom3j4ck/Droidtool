@@ -31,7 +31,8 @@ check_root_access() {
     echo -e "${RED}Failed to run adb root. Device may not support root access.${NC}"
     return 1
   fi
-  if ! adb shell id | grep -q "uid=0"; then
+  # Use adb shell to run id and check output safely
+  if ! adb shell 'id | grep -q "uid=0"' &>/dev/null; then
     echo -e "${RED}Root access required for this operation.${NC}"
     return 1
   fi
@@ -120,16 +121,29 @@ connect_ip() {
   return 1
 }
 
+#One-Click ADB Wireless Pairing (Android 11+)
+adb_wireless_pair() {
+  echo -e "${GREEN}Ensure device is on the same Wi-Fi and has 'Pair over Wi-Fi' enabled.${NC}"
+  echo -e "${YELLOW}Settings > Developer options > ADB over network > Pairing${NC}"
+  read -r -p "Enter pairing port (e.g. 37521): " port
+  read -r -p "Enter pairing code: " code
+  adb pair "$port" "$code" || { echo -e "${RED}Pairing failed. Check port/code.${NC}"; return 1; }
+  echo -e "${GREEN}✅ Paired successfully! Now connect via IP.${NC}"
+  sleep 2
+}
+
 connection_menu() {
   echo -e "${GREEN}Select connection method:${NC}"
   echo "1) USB"
   echo "2) IP"
-  echo "3) Exit"
+  echo "3) ADB Wireless Pair (Android 11+)"
+  echo "4) Exit"
   read -r -p "Choose (1-3): " c
   case $c in
     1) connect_usb || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
     2) connect_ip || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
-    3) echo "Exiting."; exit 0 ;;
+    3) adb_wireless_pair || { echo -e "${RED}Pairing failed. Exiting.${NC}"; exit 1; } ;;
+    4) echo "Exiting."; exit 0 ;;
     *) echo -e "${RED}Invalid choice.${NC}" ; connection_menu ;;
   esac
 }
@@ -140,14 +154,103 @@ disconnect_device() {
   adb disconnect || { echo -e "${RED}Failed to disconnect device${NC}"; return 1; }; 
 }
 
-show_device_info() { 
+show_device_report() {
   check_device_connection || return 1
-  output=$(adb shell getprop 2>/dev/null | grep -E "ro.product.model|ro.build.version.release|ro.serialno") || { echo -e "${RED}Failed to retrieve device info. Device may not support this command.${NC}"; return 1; }
-  if [[ -z "$output" ]]; then
-    echo -e "${RED}No device information retrieved. Device may not support this command.${NC}"
-    return 1
+  clear
+  echo -e "\n${GREEN}=== Device System Report ===${NC}"
+  echo
+
+  # === Basic Device Info ===
+  echo -e "${GREEN}Device Info${NC}"
+  local brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
+  local model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' | xargs)
+  local release=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' | xargs)
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
+  local serial=$(adb shell getprop ro.serialno 2>/dev/null | tr -d '\r' | xargs)
+
+  echo "  Brand:     ${brand:-Unknown}"
+  echo "  Model:     ${model:-Unknown}"
+  echo "  Android:   ${release:-Unknown} (SDK ${sdk:-?})"
+  echo "  Serial:    ${serial:-Unknown}"
+  echo
+
+  # === Battery ===
+  echo -e "${GREEN}Battery Status${NC}"
+  local battery=$(adb shell dumpsys battery 2>/dev/null)
+  local level=$(echo "$battery" | grep "level" | awk '{print $2}')
+  local status=$(echo "$battery" | grep "status" | awk '{print $2}')
+  local health=$(echo "$battery" | grep "health" | awk '{print $2}')
+  local temp_raw=$(echo "$battery" | grep "temperature" | awk '{print $2}')
+  local temp="?"
+
+  # Only process temp if value is numeric
+  if [[ "$temp_raw" =~ ^[0-9]+$ ]]; then
+    temp=$(awk "BEGIN {printf \"%.1f\", $temp_raw / 10}")
   fi
-  echo "$output"
+
+  case $status in
+    2) status="Charging" ;;
+    3) status="Charging (Full)" ;;
+    4) status="Not Charging" ;;
+    5) status="Discharging" ;;
+    *) status="Unknown" ;;
+  esac
+
+  echo "  Level:     ${level:-?}%"
+  echo "  Status:    $status"
+  echo "  Health:    ${health:-?}"
+  echo "  Temp:      ${temp}°C"
+  echo
+
+  # === Storage ===
+  echo -e "${GREEN}Storage Usage${NC}"
+  local storage=$(adb shell df -h /data /system /cache 2>/dev/null)
+  if [[ -n "$storage" ]]; then
+    echo "$storage" | while IFS= read -r line; do
+      echo "  $line"
+    done
+  else
+    echo "  Failed to retrieve storage info"
+  fi
+  echo
+
+  # === Network ===
+  echo -e "${GREEN}Network Info${NC}"
+  local ip=$(adb shell ip route 2>/dev/null | awk '{print $9}' | head -n1 | tr -d '\r')
+  local ssid_line=$(adb shell dumpsys wifi 2>/dev/null | grep "mWifiInfo" | head -n1)
+  local ssid="Not connected"
+  local signal="N/A"
+
+  if [[ -n "$ssid_line" ]]; then
+    ssid=$(echo "$ssid_line" | grep -o 'SSID:[^,]*' | cut -d: -f2- | sed 's/^ *//' | tr -d '\r')
+    if [[ "$ssid" == "null" || -z "$ssid" ]]; then
+      ssid="Not connected"
+    fi
+    signal=$(echo "$ssid_line" | grep -o 'RSSI: [^,]*' | cut -d: -f2 | xargs)
+  fi
+
+  echo "  IP:        ${ip:-Unknown}"
+  echo "  Wi-Fi:     $ssid"
+  echo "  Signal:    ${signal:-N/A}"
+  echo
+
+  # === Hardware ===
+  echo -e "${GREEN}Hardware Info${NC}"
+  local cpu=$(adb shell getprop ro.hardware 2>/dev/null | tr -d '\r' | xargs)
+  if [[ -z "$cpu" ]]; then
+    cpu=$(adb shell cat /proc/cpuinfo 2>/dev/null | grep 'Hardware' | head -n1 | cut -d: -f2 | xargs)
+  fi
+  [[ -z "$cpu" ]] && cpu="Unknown"
+
+  local gpu=$(adb shell getprop ro.product.gpu 2>/dev/null | tr -d '\r' | xargs)
+  [[ -z "$gpu" ]] && gpu="Unknown"
+
+  echo "  CPU:       $cpu"
+  echo "  GPU:       $gpu"
+  echo
+
+  # === Done ===
+  read -r -p "Press Enter to return..."
 }
 
 show_battery_health() { 
@@ -216,6 +319,41 @@ grow_check_root() {
   check_device_connection || return 1
   check_root_access || return 1
   echo -e "${GREEN}Root access is available.${NC}"
+}
+
+#Auto-Detect Connected Device Model
+show_device_model() {
+  check_device_connection || return 1
+  model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' | xargs)
+  brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
+  echo -e "${GREEN}Device: $brand $model${NC}"
+  read -r -p "Press Enter to continue..."
+}
+
+#List Running Apps (Foreground App)
+show_foreground_app() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Foreground App (currently on screen):${NC}"
+  fg_app=$(adb shell dumpsys window windows 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | grep -o 'u0 [^}]*' | cut -d' ' -f2 | cut -d'/' -f1 | head -n1 | tr -d '\r')
+  if [[ -n "$fg_app" ]]; then
+    echo "$fg_app"
+  else
+    echo "No active app detected"
+  fi
+  read -r -p "Press Enter to continue..."
+}
+
+#Show Network Info
+show_network_info() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Network Information:${NC}"
+  ip=$(adb shell ip route 2>/dev/null | awk '{print $9}' | head -n1 | tr -d '\r')
+  ssid=$(adb shell dumpsys wifi 2>/dev/null | grep 'mWifiInfo' | grep -o 'SSID:[^,]*' | cut -d: -f2- | tr -d '\r' | sed 's/^ *//')
+  signal=$(adb shell dumpsys wifi 2>/dev/null | grep 'Link speed' | head -n1 | tr -d '\r')
+  echo "IP Address: ${ip:-Unknown}"
+  echo "Wi-Fi SSID: ${ssid:-Not connected}"
+  echo "Signal: ${signal:-N/A}"
+  read -r -p "Press Enter to continue..."
 }
 
 # === App Management ===
@@ -422,9 +560,8 @@ extract_apk() {
 push_as_system_app() {
   read -r -p "Path to APK: " apk
 
-  # Allow only safe characters in the local file path
   if ! [[ "$apk" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $apk${NC}"
+    echo -e "${RED}File path contains invalid characters: $apk${NC}"
     return 1
   fi
 
@@ -441,6 +578,10 @@ push_as_system_app() {
 
   check_device_connection || return 1
   check_root_access || return 1
+
+  # Ensure adbd is running as root
+  adb root || { echo -e "${RED}Failed to gain root on ADB daemon${NC}"; return 1; }
+  sleep 1
 
   adb remount | grep -q "remount succeeded" || {
     echo -e "${RED}Failed to remount system partition${NC}"
@@ -461,6 +602,58 @@ push_as_system_app() {
     }
   fi
 }
+
+disable_bloatware() {
+  check_device_connection || return 1
+
+  echo -e "${GREEN}Installed apps (current user):${NC}"
+  adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' || {
+    echo -e "${RED}Failed to list packages${NC}"
+    return 1
+  }
+
+  echo
+  echo -e "${GREEN}Enter package names to disable (space-separated):${NC}"
+  read -r -a pkgs
+
+  if [[ ${#pkgs[@]} -eq 0 ]]; then
+    echo -e "${RED}No package names entered.${NC}"
+    sleep 1
+    return 1
+  fi
+
+  for pkg in "${pkgs[@]}"; do
+    # Trim carriage returns
+    pkg=${pkg//$'\r'/}
+
+    if [[ -z "$pkg" ]]; then
+      continue
+    fi
+
+    if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+      echo -e "${RED}Invalid package name: $pkg${NC}"
+      continue
+    fi
+
+    if ! adb shell pm list packages | grep -q "package:$pkg"; then
+      echo -e "${RED}Package not found: $pkg${NC}"
+      continue
+    fi
+
+    if adb shell pm list packages -e | grep -q "package:$pkg"; then
+      echo -e "${YELLOW}Package is already disabled: $pkg${NC}"
+      continue
+    fi
+
+    if adb shell pm disable-user --user 0 "$pkg" &>/dev/null; then
+      echo -e "${GREEN}Successfully disabled: $pkg${NC}"
+    else
+      echo -e "${RED}Failed to disable: $pkg (may require root or system app restrictions)${NC}"
+    fi
+  done
+
+  echo
+  read -r -p "Press Enter
 
 # === Backup & Restore ===
 apps_backup_restore_tool() {
@@ -668,43 +861,45 @@ logcat_viewer() {
 }
 
 logcat_save() {
-  if [[ ! -w "$(pwd)" ]]; then
+  # Check write permission in current directory
+  if [[ ! -w . ]]; then
     echo -e "${RED}No write permission in current directory: $(pwd)${NC}"
     return 1
   fi
 
-  # Generate safe filename using only allowed characters
-  fname="logcat_$(date +%Y%m%d_%H%M%S).txt"
-  counter=1
-  while [[ -f "$fname" ]]; do
-    fname="logcat_$(date +%Y%m%d_%H%M%S)_${counter}.txt"
-    ((counter++))
-  done
+  # Generate a unique filename safely
+  local fname
+  fname=$(mktemp -u --suffix=.txt 2>/dev/null) || \
+    fname="logcat_$(date +%Y%m%d_%H%M%S)_$$.txt"
 
-  # Validate generated filename (should never fail, but just in case)
+  # Validate generated filename (whitelist check)
   if ! [[ "$fname" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}Generated file name contains invalid characters: $fname${NC}"
+    echo -e "${RED}Generated filename contains invalid characters: $fname${NC}"
     return 1
   fi
 
+  # Confirm file can be created
   if ! touch "$fname" 2>/dev/null; then
-    echo -e "${RED}Cannot write to $fname in current directory${NC}"
+    echo -e "${RED}Cannot create file: $fname${NC}"
     return 1
   fi
 
   check_device_connection || return 1
 
   echo -e "${GREEN}Saving logcat to $fname. Press Ctrl+C to stop or wait 5 minutes.${NC}"
-  timeout 300 adb logcat > "$fname" || {
-    echo -e "${RED}Failed to save logcat to $fname${NC}"
-    rm -f "$fname"
-    return 1
-  }
+  echo -e "${GREEN}👉 Confirm on device if prompted...${NC}"
 
-  if [[ -s "$fname" ]]; then
-    echo -e "${GREEN}Logcat saved to $fname${NC}"
+  # Use 'adb logcat -d' to dump and exit (more reliable than timeout)
+  if adb logcat -d > "$fname" 2>/dev/null; then
+    if [[ -s "$fname" ]]; then
+      echo -e "${GREEN}Logcat saved to $fname${NC}"
+    else
+      echo -e "${RED}Logcat saved but file is empty${NC}"
+      rm -f "$fname"
+      return 1
+    fi
   else
-    echo -e "${RED}No logcat data saved${NC}"
+    echo -e "${RED}Failed to save logcat to $fname${NC}"
     rm -f "$fname"
     return 1
   fi
@@ -716,38 +911,93 @@ shell_access() {
 }
 
 screenshot() {
-  if [[ ! -w "$(pwd)" ]]; then
+  # Check write permission
+  if [[ ! -w . ]]; then
     echo -e "${RED}No write permission in current directory: $(pwd)${NC}"
     return 1
   fi
 
-  # Generate safe filename
-  fname="screenshot_$(date +%Y%m%d_%H%M%S).png"
-  counter=1
-  while [[ -f "$fname" ]]; do
-    fname="screenshot_$(date +%Y%m%d_%H%M%S)_${counter}.png"
-    ((counter++))
-  done
+  # Generate unique filename
+  local fname
+  fname=$(mktemp -u --suffix=.png 2>/dev/null) || \
+    fname="screenshot_$(date +%Y%m%d_%H%M%S)_$$.png"
 
-  # Validate filename using whitelist (defensive check)
+  # Validate filename
   if ! [[ "$fname" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}Generated file name contains invalid characters: $fname${NC}"
+    echo -e "${RED}Generated filename contains invalid characters: $fname${NC}"
     return 1
   fi
 
+  # Ensure we can write
   if ! touch "$fname" 2>/dev/null; then
-    echo -e "${RED}Cannot write to $fname in current directory${NC}"
+    echo -e "${RED}Cannot create file: $fname${NC}"
     return 1
   fi
 
   check_device_connection || return 1
 
-  adb exec-out screencap -p > "$fname" || {
-    echo -e "${RED}Failed to capture screenshot${NC}"
-    return 1
-  }
+  echo -e "${GREEN}Capturing screenshot...${NC}"
 
-  echo -e "${GREEN}Screenshot saved as $fname${NC}"
+  # Capture and save
+  if adb exec-out screencap -p > "$fname" 2>/dev/null; then
+    # Check if file is valid (non-zero size)
+    if [[ -s "$fname" ]]; then
+      echo -e "${GREEN}Screenshot saved as $fname${NC}"
+    else
+      echo -e "${RED}Screenshot failed: file is empty${NC}"
+      rm -f "$fname"
+      return 1
+    fi
+  else
+    echo -e "${RED}Failed to capture screenshot${NC}"
+    rm -f "$fname"
+    return 1
+  fi
+}
+
+# pull and push function
+
+pull_file() {
+  check_device_connection || return 1
+  read -r -p "Remote file path (e.g. /sdcard/file.txt): " src
+  read -r -p "Local destination (default: .): " dst
+  dst="${dst:-.}"
+
+  # Validate remote path (basic)
+  if [[ -z "$src" || "$src" == *"'"* || "$src" == '*'* ]]; then
+    echo -e "${RED}Invalid remote path${NC}"
+    return 1
+  fi
+
+  echo -e "${GREEN}Pulling $src -> $dst...${NC}"
+  if ! adb pull "$src" "$dst"; then
+    echo -e "${RED}Failed to pull $src${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Successfully pulled: $src${NC}"
+}
+
+push_file() {
+  check_device_connection || return 1
+  read -r -p "Local file path: " src
+  read -r -p "Remote destination (e.g. /sdcard/Download/): " dst
+
+  if [[ ! -f "$src" ]]; then
+    echo -e "${RED}Local file not found: $src${NC}"
+    return 1
+  fi
+
+  if [[ -z "$dst" ]]; then
+    echo -e "${RED}Remote destination required${NC}"
+    return 1
+  fi
+
+  echo -e "${GREEN}Pushing $src -> $dst...${NC}"
+  if ! adb push "$src" "$dst"; then
+    echo -e "${RED}Failed to push $src${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Successfully pushed: $src${NC}"
 }
 
 # Requires root access
@@ -764,6 +1014,25 @@ change_device_language() {
   adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; }
 }
 
+#Toggle Dark Mode (Android 10+)
+toggle_dark_mode() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Toggle System Dark Mode (Android 10+)${NC}"
+  echo "1) Dark Mode"
+  echo "2) Light Mode"
+  echo "3) Battery Saver (Auto)"
+  read -r -p "Choose: " mode
+  case $mode in
+    1) adb shell settings put secure ui_night_mode 2 ;;
+    2) adb shell settings put secure ui_night_mode 1 ;;
+    3) adb shell settings put secure ui_night_mode 0 ;;
+    *) echo -e "${RED}Invalid choice${NC}"; sleep 1; return 1 ;;
+  esac
+  adb shell cmd uimode apply
+  echo -e "${GREEN}🎨 Theme updated.${NC}"
+  sleep 2
+}
+
 # === Custom Settings for Android TV/Google TV ===
 custom_settings_menu() {
   while true; do
@@ -775,7 +1044,7 @@ custom_settings_menu() {
     echo "5) Close apps in the background"
     echo "6) Delete data and cache from apps"
     echo "7) Check for TV device updates"
-    echo "8) Remove ads"
+    echo "8) Remove ads (could require root)"
     echo "9) Back to main menu"
     read -r -p "Choose (1-9): " c
     case $c in
@@ -924,8 +1193,7 @@ remove_ads() {
 
 # === Menus ===
 main_menu() {
-  tput clear 2>/dev/null || clear
-  clear
+  (tput clear 2>/dev/null) || printf '\033[2J\033[H'
   while true; do
     echo -e "\n${GREEN}=== Droidtool Main Menu ===${NC}"
     echo "1) Device Connection & Info"
@@ -963,18 +1231,24 @@ category_device_info() {
     echo "6) Show device uptime"
     echo "7) Check device status (needs root)"
     echo "8) Check root access (needs root)"
-    echo "9) Back to main menu"
-    read -r -p "Choose (1-9): " c
+    echo "9) Show device model"
+	echo "10) Show foreground app"
+    echo "11) Show network info"
+    echo "12) Back to main menu"
+    read -r -p "Choose (1-12): " c
     case $c in
       1) disconnect_device ;;
-      2) show_device_info ;;
+      2) show_device_report ;;
       3) show_battery_health ;;
       4) show_storage_usage ;;
       5) show_cpu_mem_usage ;;
       6) show_uptime ;;
       7) device_test_status ;;
       8) grow_check_root ;;
-      9) break ;;
+      9) show_device_model ;;
+      10) show_foreground_app ;;
+      11) show_network_info ;;
+      12) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -992,7 +1266,8 @@ category_app_mgmt() {
     echo "6) Clear device cache (needs root)"
     echo "7) Extract APK from device"
     echo "8) Push APK as system app (needs root)"
-    echo "9) Back to main menu"
+    echo "9) Disable bloatware (keep, but hide)"
+    echo "10) Back to main menu"
     read -r -p "Choose (1-9): " c
     case $c in
       1) install_single_apk ;;
@@ -1003,7 +1278,8 @@ category_app_mgmt() {
       6) clear_cache_all ;;
       7) extract_apk ;;
       8) push_as_system_app ;;
-      9) break ;;
+      9) disable_bloatware ;;
+      10) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1067,15 +1343,17 @@ category_dev_tools() {
     echo "3) Open shell"
     echo "4) Take screenshot"
     echo "5) Change language & reboot (needs root)"
-    echo "6) Back to main menu"
-    read -r -p "Choose (1-6): " c
+	echo "6) Toggle dark mode (Android 10+)"
+    echo "7) Back to main menu"
+    read -r -p "Choose (1-7): " c
     case $c in
       1) logcat_viewer ;;
       2) logcat_save ;;
       3) shell_access ;;
       4) screenshot ;;
       5) change_device_language ;;
-      6) break ;;
+      6) toggle_dark_mode ;;
+      7) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
