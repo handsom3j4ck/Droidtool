@@ -5,7 +5,7 @@
 ## Features
 
 - **Device Connection & Info**:
-  - Connect via USB or IP ADB Wireless Pair
+  - Connect via USB or IP and ADB Wireless Pair
   - Display device info (model, Android version, serial number)
   - Check battery health, storage usage, CPU/memory usage (root required), and uptime
   - Verify root access and device status (root required)
