@@ -1,0 +1,1051 @@
+#!/bin/bash
+
+# Droidtool Linux Android Tool
+# Requirements: android-tools-adb, android-tools-fastboot
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+# Clean up ADB server on script termination
+trap 'adb kill-server &>/dev/null; echo -e "${RED}Script terminated. ADB server stopped.${NC}"; exit 1' SIGINT SIGTERM
+
+# Check device connection
+check_device_connection() {
+  adb start-server &>/dev/null || { echo -e "${RED}ADB server failed to start.${NC}"; return 1; }
+  if ! adb devices | grep -q "device$"; then
+    echo -e "${RED}No device connected. Please reconnect using the connection menu.${NC}"
+    return 1
+  fi
+}
+
+# Check root access
+check_root_access() {
+  check_device_connection || return 1
+  if ! adb shell "command -v su" &>/dev/null; then
+    echo -e "${RED}No 'su' binary found on device.${NC}"
+    return 1
+  fi
+  if ! adb root &>/dev/null; then
+    echo -e "${RED}Failed to run adb root. Device may not support root access.${NC}"
+    return 1
+  fi
+  if ! adb shell id | grep -q "uid=0"; then
+    echo -e "${RED}Root access required for this operation.${NC}"
+    return 1
+  fi
+  return 0
+}
+
+# Ensure android-tools is installed
+install_android_tools() {
+  echo -e "${GREEN}Checking for android-tools...${NC}"
+  if command -v adb &>/dev/null && command -v fastboot &>/dev/null; then
+    echo -e "${GREEN}android-tools is already installed.${NC}"
+    return
+  fi
+  if [ -f /etc/debian_version ]; then
+    echo -e "${GREEN}Debian/Ubuntu detected. Installing...${NC}"
+    sudo apt update || { echo -e "${RED}Failed to update package lists.${NC}"; exit 1; }
+    sudo apt install -y android-tools-adb android-tools-fastboot || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
+  elif [ -f /etc/arch-release ]; then
+    echo -e "${GREEN}Arch Linux detected. Installing...${NC}"
+    sudo pacman -Sy --noconfirm android-tools || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
+  else
+    echo -e "${RED}Unsupported system. Please install android-tools manually.${NC}"
+    exit 1
+  fi
+  if ! command -v adb &>/dev/null || ! command -v fastboot &>/dev/null; then
+    echo -e "${RED}Failed to install android-tools. Please install manually.${NC}"
+    exit 1
+  fi
+}
+
+# ADB connection functions
+connect_usb() {
+  adb kill-server
+  adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+  echo -e "${GREEN}Looking for USB devices...${NC}"
+  for i in {1..3}; do
+    adb devices
+    if adb devices | grep -q "unauthorized"; then
+      echo -e "${RED}Device unauthorized. Please accept the ADB connection on your device (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    elif adb devices | grep -q "device$"; then
+      echo -e "${GREEN}Connected via USB.${NC}"
+      return 0
+    else
+      echo -e "${RED}No device found via USB (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    fi
+  done
+  echo -e "${RED}Failed to connect via USB after 3 attempts.${NC}"
+  return 1
+}
+
+connect_ip() {
+  read -r -p "Enter device IP address: " device_ip
+  if [[ ! "$device_ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || \
+     [[ ${BASH_REMATCH[1]} -gt 255 || ${BASH_REMATCH[2]} -gt 255 || ${BASH_REMATCH[3]} -gt 255 || ${BASH_REMATCH[4]} -gt 255 ]]; then
+    echo -e "${RED}Invalid IP address format or range: $device_ip${NC}"
+    return 1
+  fi
+  adb kill-server
+  adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+  echo -e "${GREEN}Connecting to $device_ip...${NC}"
+  for i in {1..3}; do
+    adb connect "$device_ip" || { echo -e "${RED}Failed to connect to $device_ip (attempt $i/3)${NC}"; sleep 5; adb kill-server; adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }; continue; }
+    sleep 2
+    if adb devices | grep -q "$(echo "$device_ip" | sed 's/\./\\./g').*unauthorized"; then
+      echo -e "${RED}Device unauthorized. Please accept the ADB connection on your device (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    elif adb devices | grep -q "$device_ip.*device"; then
+      echo -e "${GREEN}Connected via IP.${NC}"
+      return 0
+    else
+      echo -e "${RED}Connection to $device_ip failed (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    fi
+  done
+  echo -e "${RED}Failed to connect to $device_ip after 3 attempts.${NC}"
+  return 1
+}
+
+connection_menu() {
+  echo -e "${GREEN}Select connection method:${NC}"
+  echo "1) USB"
+  echo "2) IP"
+  echo "3) Exit"
+  read -r -p "Choose (1-3): " c
+  case $c in
+    1) connect_usb || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
+    2) connect_ip || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
+    3) echo "Exiting."; exit 0 ;;
+    *) echo -e "${RED}Invalid choice.${NC}" ; connection_menu ;;
+  esac
+}
+
+# === Device Info & System ===
+disconnect_device() { 
+  check_device_connection || return 1
+  adb disconnect || { echo -e "${RED}Failed to disconnect device${NC}"; return 1; }; 
+}
+
+show_device_info() { 
+  check_device_connection || return 1
+  output=$(adb shell getprop 2>/dev/null | grep -E "ro.product.model|ro.build.version.release|ro.serialno") || { echo -e "${RED}Failed to retrieve device info. Device may not support this command.${NC}"; return 1; }
+  if [[ -z "$output" ]]; then
+    echo -e "${RED}No device information retrieved. Device may not support this command.${NC}"
+    return 1
+  fi
+  echo "$output"
+}
+
+show_battery_health() { 
+  check_device_connection || return 1
+  output=$(adb shell dumpsys battery 2>/dev/null) || { echo -e "${RED}Failed to retrieve battery health. Device may not support this command.${NC}"; return 1; }
+  if [[ -z "$output" ]]; then
+    echo -e "${RED}No battery information retrieved. Device may not support this command.${NC}"
+    return 1
+  fi
+  echo "$output"
+}
+
+show_storage_usage() { 
+  check_device_connection || return 1
+  output=$(adb shell df -h 2>/dev/null) || { echo -e "${RED}Failed to retrieve storage usage. Device may not support this command.${NC}"; return 1; }
+  if [[ -z "$output" ]]; then
+    echo -e "${RED}No storage information retrieved. Device may not support this command.${NC}"
+    return 1
+  fi
+  echo "$output"
+}
+
+# Requires root access
+show_cpu_mem_usage() { 
+  check_device_connection || return 1
+  check_root_access || return 1
+  output=$(adb shell top -n 1 2>/dev/null | head -n 12) || { echo -e "${RED}Failed to retrieve CPU and memory usage. Device may not support this command.${NC}"; return 1; }
+  if [[ -z "$output" ]]; then
+    echo -e "${RED}No CPU or memory information retrieved. Device may not support this command.${NC}"
+    return 1
+  fi
+  echo "$output"
+}
+
+show_uptime() { 
+  check_device_connection || return 1
+  output=$(adb shell uptime 2>/dev/null) || { echo -e "${RED}Failed to retrieve uptime. Device may not support this command.${NC}"; return 1; }
+  if [[ -z "$output" ]]; then
+    echo -e "${RED}No uptime information retrieved. Device may not support this command.${NC}"
+    return 1
+  fi
+  echo "$output"
+}
+
+# Requires root access
+device_test_status() {
+  check_device_connection || return 1
+  check_root_access || return 1
+  battery_output=$(adb shell dumpsys battery 2>/dev/null) || { echo -e "${RED}Failed to retrieve battery status. Device may not support this command.${NC}"; return 1; }
+  netstats_output=$(adb shell dumpsys netstats 2>/dev/null) || { echo -e "${RED}Failed to retrieve network stats. Device may not support this command.${NC}"; return 1; }
+  power_output=$(adb shell dumpsys power 2>/dev/null) || { echo -e "${RED}Failed to retrieve power status. Device may not support this command.${NC}"; return 1; }
+  if [[ -z "$battery_output" && -z "$netstats_output" && -z "$power_output" ]]; then
+    echo -e "${RED}No device status information retrieved. Device may not support these commands.${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Battery Status:${NC}"
+  echo "$battery_output"
+  echo -e "${GREEN}Network Stats:${NC}"
+  echo "$netstats_output"
+  echo -e "${GREEN}Power Status:${NC}"
+  echo "$power_output"
+}
+
+# Requires root access
+grow_check_root() {
+  check_device_connection || return 1
+  check_root_access || return 1
+  echo -e "${GREEN}Root access is available.${NC}"
+}
+
+# === App Management ===
+install_single_apk() {
+  read -r -p "Path to APK: " apk
+
+  # Use a temporary approach: check for forbidden characters using grep
+  echo -n "$apk" | grep -q '[[:space:]*?|;&'"'"'\"`]' && {
+    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $apk${NC}"
+    return 1
+  }
+
+  if [[ ! -f "$apk" ]]; then
+    echo -e "${RED}File not found: $apk${NC}"
+    return 1
+  fi
+
+  check_device_connection || return 1
+
+  timeout 300 adb install "$apk" || {
+    echo -e "${RED}Failed to install $apk${NC}"
+    return 1
+  }
+}
+
+install_apk_folder() {
+  read -r -p "APK folder: " dir
+
+  # Use grep to detect invalid characters (safe from syntax errors)
+  echo -n "$dir" | grep -q '[[:space:]*?|;&'"'"'\"`]' && {
+    echo -e "${RED}Folder path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $dir${NC}"
+    return 1
+  }
+
+  if [[ ! -d "$dir" ]]; then
+    echo -e "${RED}Folder not found: $dir${NC}"
+    return 1
+  fi
+
+  shopt -s nullglob
+  files=("$dir"/*.apk)
+  shopt -u nullglob
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo -e "${RED}No APK files found in $dir${NC}"
+    return 1
+  fi
+
+  check_device_connection || return 1
+
+  for f in "${files[@]}"; do
+    if [[ "$f" =~ [[:space:]] ]]; then
+      echo -e "${RED}Skipping file with spaces in path: $f${NC}"
+      continue
+    fi
+    echo -e "${GREEN}Installing $f...${NC}"
+    timeout 300 adb install "$f" || { echo -e "${RED}Failed to install $f${NC}"; continue; }
+  done
+}
+
+uninstall_app() {
+  read -r -p "Package name: " pkg
+  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+    echo -e "${RED}Invalid package name: $pkg${NC}"
+    return 1
+  fi
+  check_device_connection || return 1
+  if ! adb shell pm list packages | grep -q "package:$pkg"; then
+    echo -e "${RED}Package not found: $pkg${NC}"
+    return 1
+  fi
+  adb uninstall "$pkg" || { echo -e "${RED}Failed to uninstall $pkg${NC}"; return 1; }
+}
+
+batch_uninstall() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Installed apps:${NC}"
+  adb shell pm list packages | sed 's/package://g' | tr -d '\r' || { echo -e "${RED}Failed to list packages${NC}"; return 1; }
+  echo -e "\nEnter packages to uninstall (space separated):"
+  read -r -a pkgs
+  for pkg in "${pkgs[@]}"; do
+    if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+      echo -e "${RED}Skipping invalid package name: $pkg${NC}"
+      continue
+    fi
+    if ! adb shell pm list packages | grep -q "package:$pkg"; then
+      echo -e "${RED}Package not found: $pkg${NC}"
+      continue
+    fi
+    adb uninstall "$pkg" || { echo -e "${RED}Failed to uninstall $pkg${NC}"; continue; }
+  done
+}
+
+enable_disable_app() {
+  read -r -p "Package name: " pkg
+  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+    echo -e "${RED}Invalid package name: $pkg${NC}"
+    return 1
+  fi
+  check_device_connection || return 1
+  if ! adb shell pm list packages | grep -q "package:$pkg"; then
+    echo -e "${RED}Package not found: $pkg${NC}"
+    return 1
+  fi
+  echo -e "1) Enable\n2) Disable"
+  read -r -p "Choice: " action
+  check_device_connection || return 1
+  case $action in
+    1) adb shell pm enable "$pkg" || { echo -e "${RED}Failed to enable $pkg${NC}"; return 1; } ;;
+    2) adb shell pm disable-user "$pkg" || { echo -e "${RED}Failed to disable $pkg${NC}"; return 1; } ;;
+    *) echo -e "${RED}Invalid choice.${NC}" ;;
+  esac
+}
+
+# Requires root access
+clear_cache_all() {
+  check_device_connection || return 1
+  check_root_access || return 1
+  echo -e "${GREEN}Clearing cache for all apps...${NC}"
+  if ! adb shell "su -c 'pm trim-caches 1024M'" &>/dev/null; then
+    echo -e "${RED}Failed to clear cache. Root access may be unavailable.${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Cache cleared successfully.${NC}"
+}
+
+extract_apk() {
+  read -r -p "Package name: " pkg
+
+  if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+    echo -e "${RED}Invalid package name: $pkg${NC}"
+    return 1
+  fi
+
+  check_device_connection || return 1
+
+  if ! adb shell pm list packages | grep -q "package:$pkg"; then
+    echo -e "${RED}Package not found: $pkg${NC}"
+    return 1
+  fi
+
+  path=$(adb shell pm path "$pkg" | awk -F':' '{print $2}' | tr -d '\r' | head -n 1)
+
+  if [[ $(adb shell pm path "$pkg" | wc -l) -gt 1 ]]; then
+    echo -e "${RED}Warning: Multiple APKs found for $pkg. Pulling first one.${NC}"
+  fi
+
+  if [[ -z "$path" ]]; then
+    echo -e "${RED}Failed to find APK path for $pkg${NC}"
+    return 1
+  fi
+
+  # Allow only safe path characters: letters, numbers, /, ., _, -, ~
+  if ! [[ "$path" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}APK path contains invalid characters (spaces, *, ?, |, ;, &, etc.): $path${NC}"
+    return 1
+  fi
+
+  timeout 300 adb pull "$path" || {
+    echo -e "${RED}Failed to pull APK for $pkg${NC}"
+    return 1
+  }
+}
+
+# Requires root access
+push_as_system_app() {
+  read -r -p "Path to APK: " apk
+
+  # Allow only safe characters in the local file path
+  if ! [[ "$apk" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $apk${NC}"
+    return 1
+  fi
+
+  read -r -p "Target folder (/system/app or /system/priv-app): " target
+  if [[ "$target" != "/system/app" && "$target" != "/system/priv-app" ]]; then
+    echo -e "${RED}Invalid target folder. Use /system/app or /system/priv-app.${NC}"
+    return 1
+  fi
+
+  if [[ ! -f "$apk" ]]; then
+    echo -e "${RED}File not found: $apk${NC}"
+    return 1
+  fi
+
+  check_device_connection || return 1
+  check_root_access || return 1
+
+  adb remount | grep -q "remount succeeded" || {
+    echo -e "${RED}Failed to remount system partition${NC}"
+    return 1
+  }
+
+  timeout 300 adb push "$apk" "$target/" || {
+    echo -e "${RED}Failed to push $apk to $target${NC}"
+    return 1
+  }
+
+  echo -e "${GREEN}APK pushed to $target. Reboot required to apply changes.${NC}"
+  read -r -p "Reboot now? (y/n): " confirm
+  if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+    adb reboot || {
+      echo -e "${RED}Failed to reboot${NC}"
+      return 1
+    }
+  fi
+}
+
+# === Backup & Restore ===
+apps_backup_restore_tool() {
+  while true; do
+    clear
+    echo -e "\n${GREEN}Apps Backup and Restore Tool:${NC}"
+    echo "1) Backup all apps and data"
+    echo "2) Backup specific app data"
+    echo "3) Restore from backed-up file"
+    echo "4) List available backups"
+    echo "5) Back to Backup & Restore menu"
+    read -r -p "Choose (1-5): " choice
+
+    case $choice in
+      1)
+        read -r -p "Backup file name (e.g., full_backup.ab): " abfile
+        if ! [[ "$abfile" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+          echo -e "${RED}File name contains invalid characters: $abfile${NC}"
+          sleep 1
+          continue
+        fi
+
+        dir=$(dirname "$abfile")
+        if [[ ! -w "$dir" ]]; then
+          echo -e "${RED}No write permission in directory: $dir${NC}"
+          sleep 1
+          continue
+        fi
+
+        if [[ -f "$abfile" ]]; then
+          read -r -p "File exists. Overwrite? (y/n): " confirm
+          [[ "$confirm" != "y" && "$confirm" != "Y" ]] && echo -e "${RED}Backup cancelled.${NC}" && sleep 1 && continue
+        fi
+
+        touch "$abfile" 2>/dev/null || { echo -e "${RED}Cannot write to $abfile${NC}"; sleep 1; continue; }
+
+        check_device_connection || { sleep 1; continue; }
+
+        echo -e "${GREEN}Confirm backup on device within 30 seconds.${NC}"
+        timeout 30 adb backup -apk -shared -all -f "$abfile" || { echo -e "${RED}Backup failed${NC}"; rm -f "$abfile"; sleep 1; continue; }
+
+        if [[ ! -s "$abfile" ]]; then
+          echo -e "${RED}Backup file is empty${NC}"
+          rm -f "$abfile"
+          sleep 1
+          continue
+        fi
+
+        echo -e "${GREEN}Backup saved as $abfile${NC}"
+        sleep 2
+        ;;
+
+      2)
+        read -r -p "Package name: " pkg
+        [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]] && echo -e "${RED}Invalid package name${NC}" && sleep 1 && continue
+
+        if ! adb shell pm list packages | grep -q "package:$pkg"; then
+          echo -e "${RED}Package not found: $pkg${NC}"
+          sleep 1
+          continue
+        fi
+
+        read -r -p "Backup file name (e.g., ${pkg}_data.ab): " abfile
+        if ! [[ "$abfile" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+          echo -e "${RED}Invalid file name: $abfile${NC}"
+          sleep 1
+          continue
+        fi
+
+        dir=$(dirname "$abfile")
+        [[ ! -w "$dir" ]] && echo -e "${RED}No write permission: $dir${NC}" && sleep 1 && continue
+
+        if [[ -f "$abfile" ]]; then
+          read -r -p "Overwrite? (y/n): " confirm
+          [[ "$confirm" != "y" && "$confirm" != "Y" ]] && echo -e "${RED}Backup cancelled.${NC}" && sleep 1 && continue
+        fi
+
+        touch "$abfile" 2>/dev/null || { echo -e "${RED}Cannot write to $abfile${NC}"; sleep 1; continue; }
+
+        check_device_connection || { sleep 1; continue; }
+
+        echo -e "${GREEN}Confirm on device within 30 seconds.${NC}"
+        timeout 30 adb backup -noapk -noshared "$pkg" -f "$abfile" || { echo -e "${RED}Backup failed${NC}"; rm -f "$abfile"; sleep 1; continue; }
+
+        if [[ ! -s "$abfile" ]]; then
+          echo -e "${RED}Backup file is empty${NC}"
+          rm -f "$abfile"
+          sleep 1
+          continue
+        fi
+
+        echo -e "${GREEN}App data backup saved as $abfile${NC}"
+        sleep 2
+        ;;
+
+      3)
+        read -r -p "Backup file path: " abfile
+        if ! [[ "$abfile" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+          echo -e "${RED}Invalid file path: $abfile${NC}"
+          sleep 1
+          continue
+        fi
+
+        if [[ -f "$abfile" ]]; then
+          check_device_connection || { sleep 1; continue; }
+          adb restore "$abfile" || echo -e "${RED}Restore failed${NC}"
+          echo -e "${GREEN}Restore initiated for $abfile${NC}"
+          sleep 2
+        else
+          echo -e "${RED}File not found: $abfile${NC}"
+          sleep 1
+        fi
+        ;;
+
+      4)
+        echo -e "${GREEN}Available backups:${NC}"
+        ls -lh *.ab 2>/dev/null || echo -e "${RED}No backups found${NC}"
+        read -r -p "Press Enter to continue..."
+        ;;
+
+      5)
+        break
+        ;;
+
+      *)
+        echo -e "${RED}Invalid choice.${NC}"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+# === Reboot & Recovery ===
+reboot_menu() {
+  echo -e "${GREEN}Reboot Options:${NC}"
+  echo "1) Reboot to system"
+  echo "2) Reboot to recovery"
+  echo "3) Reboot to bootloader"
+  echo "4) Reboot to fastboot mode"
+  read -r -p "Choice: " r
+  check_device_connection || return 1
+  case $r in
+    1) adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; } ;;
+    2) adb reboot recovery || { echo -e "${RED}Failed to reboot to recovery${NC}"; return 1; } ;;
+    3) adb reboot bootloader || { echo -e "${RED}Failed to reboot to bootloader${NC}"; return 1; } ;;
+    4) adb shell reboot fastboot || { echo -e "${RED}Failed to reboot to fastboot mode${NC}"; return 1; } ;;
+    *) echo -e "${RED}Invalid choice${NC}" ;;
+  esac
+}
+
+sideload_zip() {
+  read -r -p "ZIP file path: " zip
+
+  # Allow only safe characters in the file path
+  if ! [[ "$zip" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $zip${NC}"
+    return 1
+  fi
+
+  # Check if file exists and has .zip extension
+  if [[ ! -f "$zip" ]]; then
+    echo -e "${RED}File not found: $zip${NC}"
+    return 1
+  fi
+
+  if ! [[ "$zip" =~ \.zip$ ]]; then
+    echo -e "${RED}Invalid file type. Only .zip files are allowed: $zip${NC}"
+    return 1
+  fi
+
+  # Check ADB state
+  if ! adb get-state | grep -q "recovery"; then
+    echo -e "${RED}Device is not in recovery mode. Please boot into recovery first.${NC}"
+    return 1
+  fi
+
+  if ! adb devices | grep -q "sideload"; then
+    echo -e "${RED}Device is not in sideload mode. Please enable ADB sideload in recovery.${NC}"
+    return 1
+  fi
+
+  echo -e "${GREEN}Starting sideload...${NC}"
+  timeout 600 adb sideload "$zip" || {
+    echo -e "${RED}Failed to sideload $zip or timed out${NC}"
+    return 1
+  }
+
+  echo -e "${GREEN}Sideload completed successfully.${NC}"
+}
+
+# === Developer Tools ===
+logcat_viewer() {
+  read -r -p "Filter (optional): " filter
+  if [[ -n "$filter" && ! "$filter" =~ ^[a-zA-Z0-9_-]*$ ]]; then
+    echo -e "${RED}Invalid filter: only alphanumeric, underscore, and dash allowed${NC}"
+    return 1
+  fi
+  check_device_connection || return 1
+  trap 'echo -e "${RED}Logcat interrupted${NC}"; return 1' SIGINT
+  if [[ -z "$filter" ]]; then
+    adb logcat || { echo -e "${RED}Failed to display logcat${NC}"; return 1; }
+  else
+    adb logcat | grep -- "$filter" || { echo -e "${RED}Failed to display filtered logcat${NC}"; return 1; }
+  fi
+}
+
+logcat_save() {
+  if [[ ! -w "$(pwd)" ]]; then
+    echo -e "${RED}No write permission in current directory: $(pwd)${NC}"
+    return 1
+  fi
+
+  # Generate safe filename using only allowed characters
+  fname="logcat_$(date +%Y%m%d_%H%M%S).txt"
+  counter=1
+  while [[ -f "$fname" ]]; do
+    fname="logcat_$(date +%Y%m%d_%H%M%S)_${counter}.txt"
+    ((counter++))
+  done
+
+  # Validate generated filename (should never fail, but just in case)
+  if ! [[ "$fname" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Generated file name contains invalid characters: $fname${NC}"
+    return 1
+  fi
+
+  if ! touch "$fname" 2>/dev/null; then
+    echo -e "${RED}Cannot write to $fname in current directory${NC}"
+    return 1
+  fi
+
+  check_device_connection || return 1
+
+  echo -e "${GREEN}Saving logcat to $fname. Press Ctrl+C to stop or wait 5 minutes.${NC}"
+  timeout 300 adb logcat > "$fname" || {
+    echo -e "${RED}Failed to save logcat to $fname${NC}"
+    rm -f "$fname"
+    return 1
+  }
+
+  if [[ -s "$fname" ]]; then
+    echo -e "${GREEN}Logcat saved to $fname${NC}"
+  else
+    echo -e "${RED}No logcat data saved${NC}"
+    rm -f "$fname"
+    return 1
+  fi
+}
+
+shell_access() { 
+  check_device_connection || return 1
+  adb shell || { echo -e "${RED}Failed to open shell${NC}"; return 1; }; 
+}
+
+screenshot() {
+  if [[ ! -w "$(pwd)" ]]; then
+    echo -e "${RED}No write permission in current directory: $(pwd)${NC}"
+    return 1
+  fi
+
+  # Generate safe filename
+  fname="screenshot_$(date +%Y%m%d_%H%M%S).png"
+  counter=1
+  while [[ -f "$fname" ]]; do
+    fname="screenshot_$(date +%Y%m%d_%H%M%S)_${counter}.png"
+    ((counter++))
+  done
+
+  # Validate filename using whitelist (defensive check)
+  if ! [[ "$fname" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Generated file name contains invalid characters: $fname${NC}"
+    return 1
+  fi
+
+  if ! touch "$fname" 2>/dev/null; then
+    echo -e "${RED}Cannot write to $fname in current directory${NC}"
+    return 1
+  fi
+
+  check_device_connection || return 1
+
+  adb exec-out screencap -p > "$fname" || {
+    echo -e "${RED}Failed to capture screenshot${NC}"
+    return 1
+  }
+
+  echo -e "${GREEN}Screenshot saved as $fname${NC}"
+}
+
+# Requires root access
+change_device_language() {
+  read -r -p "Language code (e.g. en, de): " lang
+  if [[ ! "$lang" =~ ^[a-z]{2}$ ]]; then
+    echo -e "${RED}Invalid language code: $lang (use 2-letter ISO 639-1 code, e.g., en, de)${NC}"
+    return 1
+  fi
+  check_device_connection || return 1
+  check_root_access || return 1
+  adb shell setprop persist.sys.language "$lang" || { echo -e "${RED}Failed to set language${NC}"; return 1; }
+  echo -e "${GREEN}Language changed to $lang, rebooting device...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; }
+}
+
+# === Custom Settings for Android TV/Google TV ===
+custom_settings_menu() {
+  while true; do
+    echo -e "\n${GREEN}Custom Settings for Android TV/Google TV:${NC}"
+    echo "1) Apply general-purpose performance improvements"
+    echo "2) Enable processing speed management system"
+    echo "3) Delete cache memory (needs root)"
+    echo "4) Optimize application performance"
+    echo "5) Close apps in the background"
+    echo "6) Delete data and cache from apps"
+    echo "7) Check for TV device updates"
+    echo "8) Remove ads"
+    echo "9) Back to main menu"
+    read -r -p "Choose (1-9): " c
+    case $c in
+      1) apply_general_performance_improvements ;;
+      2) enable_processing_speed_management ;;
+      3) delete_cache_memory ;;
+      4) optimize_app_performance ;;
+      5) close_background_apps ;;
+      6) delete_app_data_cache ;;
+      7) check_for_updates ;;
+      8) remove_ads ;;
+      9) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+apply_general_performance_improvements() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Applying general-purpose performance improvements...${NC}"
+  adb shell settings put global cached_apps_freezer enabled || { echo -e "${RED}Failed to set cached_apps_freezer${NC}"; return 1; }
+  adb shell settings put secure tap_duration_threshold 0.0 || { echo -e "${RED}Failed to set tap_duration_threshold${NC}"; return 1; }
+  adb shell settings put secure touch_blocking_period 0.0 || { echo -e "${RED}Failed to set touch_blocking_period${NC}"; return 1; }
+  echo -e "${GREEN}Performance improvements applied.${NC}"
+  sleep 2
+}
+
+enable_processing_speed_management() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Enabling processing speed management system...${NC}"
+  adb shell settings put global sem_enhanced_cpu_responsiveness 1 || { echo -e "${RED}Failed to enable CPU responsiveness${NC}"; return 1; }
+  echo -e "${GREEN}Processing speed management enabled.${NC}"
+  sleep 2
+}
+
+# Requires root access
+delete_cache_memory() {
+  check_device_connection || return 1
+  check_root_access || return 1
+  echo -e "${GREEN}Deleting cache memory for all apps...${NC}"
+  if ! adb shell "su -c 'pm trim-caches 1024M'" &>/dev/null; then
+    echo -e "${RED}Failed to clear cache. Root access may be unavailable.${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Cache memory deleted.${NC}"
+  sleep 2
+}
+
+optimize_app_performance() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Optimizing application performance...${NC}"
+  adb shell cmd package compile -m speed-profile -a || { echo -e "${RED}Failed to optimize apps${NC}"; return 1; }
+  echo -e "${GREEN}Application performance optimized.${NC}"
+  sleep 2
+}
+
+close_background_apps() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Closing apps in the background...${NC}"
+  while read -r pkg; do
+    pkg=${pkg//$'\r'/}
+    adb shell am force-stop "$pkg" || { echo -e "${RED}Failed to stop $pkg${NC}"; continue; }
+  done < <(adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r') || { echo -e "${RED}Failed to list packages${NC}"; return 1; }
+  echo -e "${GREEN}Background apps closed.${NC}"
+  sleep 2
+}
+
+delete_app_data_cache() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Installed packages:${NC}"
+  adb shell pm list packages | sed 's/package://g' | tr -d '\r' || { echo -e "${RED}Failed to list packages${NC}"; return 1; }
+  read -r -p "Enter package name to delete data and cache: " pkg
+  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+    echo -e "${RED}Invalid package name: $pkg${NC}"
+    return 1
+  fi
+  if ! adb shell pm list packages | grep -q "package:$pkg"; then
+    echo -e "${RED}Package not found: $pkg${NC}"
+    return 1
+  fi
+  adb shell pm clear "$pkg" || { echo -e "${RED}Failed to clear data for $pkg${NC}"; return 1; }
+  echo -e "${GREEN}Data and cache deleted for $pkg.${NC}"
+  sleep 2
+}
+
+check_for_updates() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Opening system update settings...${NC}"
+  adb shell am start -a android.settings.SYSTEM_UPDATE_SETTINGS || { echo -e "${RED}Failed to open update settings${NC}"; return 1; }
+  echo -e "${GREEN}System update settings opened.${NC}"
+  sleep 2
+}
+
+remove_ads() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Remove ads by configuring private DNS:${NC}"
+  echo "1) Disable private DNS (default)"
+  echo "2) Enable AdGuard private DNS"
+  echo "3) Enable ControlD private DNS"
+  read -r -p "Choose (1-3): " choice
+  case $choice in
+    1)
+      adb shell settings put global private_dns_mode off || { echo -e "${RED}Failed to disable private DNS${NC}"; return 1; }
+      adb shell settings delete global default_dns_server || { echo -e "${RED}Failed to delete default DNS${NC}"; return 1; }
+      adb shell settings put global private_dns 0 || { echo -e "${RED}Failed to set private DNS${NC}"; return 1; }
+      echo -e "${GREEN}Private DNS disabled.${NC}"
+      ;;
+    2)
+      adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
+      adb shell settings put global private_dns_specifier dns.adguard.com || { echo -e "${RED}Failed to set AdGuard DNS${NC}"; return 1; }
+      if adb shell pm list packages | grep -q "com.google.android.apps.tv.launcherx"; then
+        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx. Root access may be required.${NC}"; }
+      else
+        echo -e "${RED}Package com.google.android.apps.tv.launcherx not found${NC}"
+      fi
+      if adb shell pm list packages | grep -q "com.android.providers.tv"; then
+        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv. Root access may be required.${NC}"; }
+      else
+        echo -e "${RED}Package com.android.providers.tv not found${NC}"
+      fi
+      echo -e "${GREEN}AdGuard private DNS enabled.${NC}"
+      ;;
+    3)
+      adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
+      adb shell settings put global private_dns_specifier p2.freedns.controld.com || { echo -e "${RED}Failed to set ControlD DNS${NC}"; return 1; }
+      if adb shell pm list packages | grep -q "com.google.android.apps.tv.launcherx"; then
+        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx. Root access may be required.${NC}"; }
+      else
+        echo -e "${RED}Package com.google.android.apps.tv.launcherx not found${NC}"
+      fi
+      if adb shell pm list packages | grep -q "com.android.providers.tv"; then
+        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv. Root access may be required.${NC}"; }
+      else
+        echo -e "${RED}Package com.android.providers.tv not found${NC}"
+      fi
+      echo -e "${GREEN}ControlD private DNS enabled.${NC}"
+      ;;
+    *)
+      echo -e "${RED}Invalid choice.${NC}"
+      ;;
+  esac
+  sleep 2
+}
+
+# === Menus ===
+main_menu() {
+  tput clear 2>/dev/null || clear
+  clear
+  while true; do
+    echo -e "\n${GREEN}=== Droidtool Main Menu ===${NC}"
+    echo "1) Device Connection & Info"
+    echo "2) App Management"
+    echo "3) Backup & Restore"
+    echo "4) File Management"
+    echo "5) Reboot & Sideload"
+    echo "6) Developer Tools"
+    echo "7) Custom Settings"
+    echo "8) Exit"
+    read -r -p "Select category (1-8): " cat
+    case $cat in
+      1) category_device_info ;;
+      2) category_app_mgmt ;;
+      3) category_backup ;;
+      4) category_files ;;
+      5) category_reboot ;;
+      6) category_dev_tools ;;
+      7) custom_settings_menu ;;
+      8) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_device_info() {
+  clear
+  while true; do
+    echo -e "\n${GREEN}Device Connection & Info:${NC}"
+    echo "1) Disconnect device"
+    echo "2) Show device info"
+    echo "3) Show battery health"
+    echo "4) Show storage usage"
+    echo "5) Show CPU & memory usage (needs root)"
+    echo "6) Show device uptime"
+    echo "7) Check device status (needs root)"
+    echo "8) Check root access (needs root)"
+    echo "9) Back to main menu"
+    read -r -p "Choose (1-9): " c
+    case $c in
+      1) disconnect_device ;;
+      2) show_device_info ;;
+      3) show_battery_health ;;
+      4) show_storage_usage ;;
+      5) show_cpu_mem_usage ;;
+      6) show_uptime ;;
+      7) device_test_status ;;
+      8) grow_check_root ;;
+      9) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_app_mgmt() {
+  clear
+  while true; do
+    echo -e "${GREEN}\n App Management:${NC}"
+    echo "1) Install single APK"
+    echo "2) Install multiple APKs"
+    echo "3) Uninstall app"
+    echo "4) Batch uninstall apps"
+    echo "5) Enable/disable app"
+    echo "6) Clear device cache (needs root)"
+    echo "7) Extract APK from device"
+    echo "8) Push APK as system app (needs root)"
+    echo "9) Back to main menu"
+    read -r -p "Choose (1-9): " c
+    case $c in
+      1) install_single_apk ;;
+      2) install_apk_folder ;;
+      3) uninstall_app ;;
+      4) batch_uninstall ;;
+      5) enable_disable_app ;;
+      6) clear_cache_all ;;
+      7) extract_apk ;;
+      8) push_as_system_app ;;
+      9) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_backup() {
+  clear
+  while true; do
+    echo -e "${GREEN}\n Backup & Restore:${NC}"
+    echo "1) Apps Backup and Restore Tool"
+    echo "2) Back to main menu"
+    read -r -p "Choose (1-2): " c
+    case $c in
+      1) apps_backup_restore_tool ;;
+      2) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_files() {
+  clear
+  while true; do
+    echo -e "${GREEN}\n File Management:${NC}"
+    echo "1) Pull file from device"
+    echo "2) Push file to device"
+    echo "3) Back to main menu"
+    read -r -p "Choose (1-3): " c
+    case $c in
+      1) pull_file ;;
+      2) push_file ;;
+      3) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_reboot() {
+  clear
+  while true; do
+    echo -e "${GREEN}\n Reboot & Sideload:${NC}"
+    echo "1) Reboot options"
+    echo "2) Sideload ZIP"
+    echo "3) Back to main menu"
+    read -r -p "Choose (1-3): " c
+    case $c in
+      1) reboot_menu ;;
+      2) sideload_zip ;;
+      3) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_dev_tools() {
+  clear
+  while true; do
+    echo -e "${GREEN}\n Developer Tools:${NC}"
+    echo "1) Show logcat"
+    echo "2) Save logcat to file"
+    echo "3) Open shell"
+    echo "4) Take screenshot"
+    echo "5) Change language & reboot (needs root)"
+    echo "6) Back to main menu"
+    read -r -p "Choose (1-6): " c
+    case $c in
+      1) logcat_viewer ;;
+      2) logcat_save ;;
+      3) shell_access ;;
+      4) screenshot ;;
+      5) change_device_language ;;
+      6) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+# === Script start ===
+echo -e "${GREEN}=================================${NC}"
+echo -e "${GREEN}             Droidtool           ${NC}"
+echo -e "${GREEN}=================================${NC}"
+echo -e "${NC}"
+install_android_tools
+connection_menu
+main_menu
