@@ -279,8 +279,8 @@ install_apk_folder() {
 uninstall_app() {
   check_device_connection || return 1
 
-  echo -e "${GREEN}Installed apps:${NC}"
-  adb shell pm list packages | sed 's/package://g' | tr -d '\r' || {
+  echo -e "${GREEN}Installed apps (current user):${NC}"
+  adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' || {
     echo -e "${RED}Failed to list packages${NC}"
     return 1
   }
@@ -298,18 +298,23 @@ uninstall_app() {
     return 1
   fi
 
-  adb uninstall "$pkg" || {
-    echo -e "${RED}Failed to uninstall $pkg${NC}"
+  # Uninstall for current user
+  adb shell pm uninstall --user 0 "$pkg" || {
+    echo -e "${RED}Failed to uninstall $pkg (system app or permission issue)${NC}"
     return 1
   }
 
-  echo -e "${GREEN}Successfully uninstalled $pkg${NC}"
+  echo -e "${GREEN}Successfully uninstalled $pkg for current user.${NC}"
 }
 
 batch_uninstall() {
   check_device_connection || return 1
-  echo -e "${GREEN}Installed apps:${NC}"
-  adb shell pm list packages | sed 's/package://g' | tr -d '\r' || { echo -e "${RED}Failed to list packages${NC}"; return 1; }
+  echo -e "${GREEN}Installed apps (current user):${NC}"
+  adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' || {
+    echo -e "${RED}Failed to list packages${NC}"
+    return 1
+  }
+
   echo -e "\nEnter packages to uninstall (space separated):"
   read -r -a pkgs
   for pkg in "${pkgs[@]}"; do
@@ -321,7 +326,11 @@ batch_uninstall() {
       echo -e "${RED}Package not found: $pkg${NC}"
       continue
     fi
-    adb uninstall "$pkg" || { echo -e "${RED}Failed to uninstall $pkg${NC}"; continue; }
+    adb shell pm uninstall --user 0 "$pkg" || {
+      echo -e "${RED}Failed to uninstall $pkg${NC}"
+      continue
+    }
+    echo -e "${GREEN}Uninstalled: $pkg${NC}"
   done
 }
 
@@ -338,11 +347,24 @@ enable_disable_app() {
   fi
   echo -e "1) Enable\n2) Disable"
   read -r -p "Choice: " action
-  check_device_connection || return 1
   case $action in
-    1) adb shell pm enable "$pkg" || { echo -e "${RED}Failed to enable $pkg${NC}"; return 1; } ;;
-    2) adb shell pm disable-user "$pkg" || { echo -e "${RED}Failed to disable $pkg${NC}"; return 1; } ;;
-    *) echo -e "${RED}Invalid choice.${NC}" ;;
+    1)
+      adb shell am --user 0 enable "$pkg" || {
+        echo -e "${RED}Failed to enable $pkg (may require root or system-level access)${NC}"
+        return 1
+      }
+      echo -e "${GREEN}$pkg enabled for user 0.${NC}"
+      ;;
+    2)
+      adb shell pm disable-user --user 0 "$pkg" || {
+        echo -e "${RED}Failed to disable $pkg${NC}"
+        return 1
+      }
+      echo -e "${GREEN}$pkg disabled for user 0.${NC}"
+      ;;
+    *)
+      echo -e "${RED}Invalid choice.${NC}"
+      ;;
   esac
 }
 
@@ -823,8 +845,12 @@ close_background_apps() {
 
 delete_app_data_cache() {
   check_device_connection || return 1
-  echo -e "${GREEN}Installed packages:${NC}"
-  adb shell pm list packages | sed 's/package://g' | tr -d '\r' || { echo -e "${RED}Failed to list packages${NC}"; return 1; }
+  echo -e "${GREEN}Installed packages (current user):${NC}"
+  adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' || {
+    echo -e "${RED}Failed to list packages${NC}"
+    return 1
+  }
+
   read -r -p "Enter package name to delete data and cache: " pkg
   if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
     echo -e "${RED}Invalid package name: $pkg${NC}"
@@ -834,16 +860,14 @@ delete_app_data_cache() {
     echo -e "${RED}Package not found: $pkg${NC}"
     return 1
   fi
-  adb shell pm clear "$pkg" || { echo -e "${RED}Failed to clear data for $pkg${NC}"; return 1; }
-  echo -e "${GREEN}Data and cache deleted for $pkg.${NC}"
-  sleep 2
-}
 
-check_for_updates() {
-  check_device_connection || return 1
-  echo -e "${GREEN}Opening system update settings...${NC}"
-  adb shell am start -a android.settings.SYSTEM_UPDATE_SETTINGS || { echo -e "${RED}Failed to open update settings${NC}"; return 1; }
-  echo -e "${GREEN}System update settings opened.${NC}"
+  # Clear data in user 0 context
+  adb shell pm clear --user 0 "$pkg" || {
+    echo -e "${RED}Failed to clear data for $pkg (permission/user issue)${NC}"
+    return 1
+  }
+
+  echo -e "${GREEN}Data and cache deleted for $pkg (user 0).${NC}"
   sleep 2
 }
 
