@@ -10,6 +10,7 @@
   - Show battery health, storage usage, CPU/memory usage (root required), and uptime
   - Verify root access and device status (root required)
   - Show device model, foreground app, and network info (IP, Wi-Fi SSID, signal strength)
+  - Disconnect device from ADB
 
 - **App Management**:
   - Install single or multiple APKs
@@ -21,9 +22,10 @@
   - Disable bloatware (hide apps without uninstalling)
 
 - **Backup & Restore**:
-  - Backup all apps and data or specific app data
-  - Restore from backup files
+  - Backup all apps and data or specific app data (ADB or root methods)
+  - Restore from backup files (`.ab`, `.ab.gz`, or `.tar.gz` with root)
   - List available backups
+  - Root options for backing up `/data`, `/system`, `/cache` partitions or specific app data via `tar.gz`
 
 - **File Management**:
   - Pull files or folders from the device
@@ -115,6 +117,7 @@ The script will automatically check for and install `android-tools-adb` and `and
 - **Safety**: Be cautious with destructive actions like clearing app data, uninstalling system apps, or deleting files/folders. Always back up important data.
 - **File Management**: Use `/storage/emulated/0` instead of `/sdcard` for reliable file operations, as `/sdcard` is a symlink.
 - **Android TV/Google TV**: The custom settings menu is tailored for Android TV devices but may work on other Android systems with similar configurations.
+- **Backup & Restore**: ADB backups may fail for app data on Android 6+ due to system limitations; root-based `tar.gz` backups are recommended for reliability.
 
 ## Contributing
 

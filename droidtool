@@ -660,127 +660,552 @@ disable_bloatware() {
 apps_backup_restore_tool() {
   while true; do
     clear
-    echo -e "\n${GREEN}Apps Backup and Restore Tool:${NC}"
-    echo "1) Backup all apps and data"
-    echo "2) Backup specific app data"
-    echo "3) Restore from backed-up file"
-    echo "4) List available backups"
-    echo "5) Back to Backup & Restore menu"
-    read -r -p "Choose (1-5): " choice
+    echo -e "\nBackup and Restore Tool:"
+
+    local has_root=false
+    if check_device_connection &>/dev/null && check_root_access &>/dev/null; then
+      has_root=true
+    fi
+
+    echo "1) Backup all apps and data (adb)"
+    if [[ "$has_root" == true ]]; then
+      echo "   1R) ROOT: Backup /data, /system, /cache partitions (via tar)"
+    fi
+
+    echo "2) Backup specific app APK only (adb)"
+    if [[ "$has_root" == true ]]; then
+      echo "   2R) ROOT: Extract APK directly from /data/app or /system/app"
+    fi
+
+    echo "3) Backup specific app data only (adb) - may fail"
+    if [[ "$has_root" == true ]]; then
+      echo "   3R) ROOT: Backup app data via tar.gz (recommended)"
+    fi
+
+    echo "4) Backup specific app APK + data (adb)"
+    if [[ "$has_root" == true ]]; then
+      echo "   4R) ROOT: Backup APK + data in one tar.gz"
+    fi
+
+    echo "5) Restore from .ab or .ab.gz (adb)"
+    if [[ "$has_root" == true ]]; then
+      echo "   5R) ROOT: Restore app data from tar.gz"
+    fi
+
+    echo "6) List available backups"
+    echo "7) Back to main menu"
+    read -r -p "Choose (1-7 or xR): " choice
+
+    # Handle root check at start of each R option
+    ensure_root() {
+      if ! check_device_connection || ! check_root_access; then
+        echo "Root access required for this option."
+        sleep 2
+        return 1
+      fi
+      return 0
+    }
 
     case $choice in
+      # ========================================
+      # 1) ADB: Full Backup
+      # 1R) ROOT: Tar system partitions
+      # ========================================
       1)
-        read -r -p "Backup file name (e.g., full_backup.ab): " abfile
-        if ! [[ "$abfile" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-          echo -e "${RED}File name contains invalid characters: $abfile${NC}"
-          sleep 1
-          continue
-        fi
+        echo "Starting full ADB backup..."
+        echo "Confirm on device within 60 seconds"
+        read -r -p "Output file (default: full_backup.ab): " abfile
+        abfile="${abfile:-full_backup.ab}"
 
-        dir=$(dirname "$abfile")
-        if [[ ! -w "$dir" ]]; then
-          echo -e "${RED}No write permission in directory: $dir${NC}"
+        if ! [[ "$abfile" =~ ^[a-zA-Z0-9_/.-]+$ ]]; then
+          echo "Invalid filename"
           sleep 1
           continue
         fi
 
         if [[ -f "$abfile" ]]; then
           read -r -p "File exists. Overwrite? (y/n): " confirm
-          [[ "$confirm" != "y" && "$confirm" != "Y" ]] && echo -e "${RED}Backup cancelled.${NC}" && sleep 1 && continue
+          [[ ! "$confirm" =~ ^[Yy]$ ]] && continue
         fi
 
-        touch "$abfile" 2>/dev/null || { echo -e "${RED}Cannot write to $abfile${NC}"; sleep 1; continue; }
+        check_device_connection || continue
 
-        check_device_connection || { sleep 1; continue; }
-
-        echo -e "${GREEN}Confirm backup on device within 30 seconds.${NC}"
-        timeout 30 adb backup -apk -shared -all -f "$abfile" || { echo -e "${RED}Backup failed${NC}"; rm -f "$abfile"; sleep 1; continue; }
-
-        if [[ ! -s "$abfile" ]]; then
-          echo -e "${RED}Backup file is empty${NC}"
-          rm -f "$abfile"
-          sleep 1
+        if ! timeout 120 adb backup -all -f "$abfile"; then
+          echo "Backup failed or timed out"
+          rm -f "$abfile" 2>/dev/null
+          sleep 2
           continue
         fi
 
-        echo -e "${GREEN}Backup saved as $abfile${NC}"
+        if [[ ! -s "$abfile" ]]; then
+          echo "Backup file is empty"
+          rm -f "$abfile"
+          sleep 2
+          continue
+        fi
+
+        echo "Backup saved: $abfile"
+
+        read -r -p "Compress with gzip? (y/n): " compress
+        if [[ "$compress" =~ ^[Yy]$ ]]; then
+          gzip -c "$abfile" > "${abfile}.gz" && rm -f "$abfile" && echo "Saved as ${abfile}.gz"
+        fi
         sleep 2
         ;;
 
+      1R)
+        if ! ensure_root; then continue; fi
+        echo -e "\nAvailable partitions to backup:"
+        echo "  a) /data"
+        echo "  b) /system"
+        echo "  c) /cache"
+        echo "  d) /data + /cache"
+        echo "  e) All (data, system, cache)"
+        read -r -p "Choose partition(s): " part
+
+        local parts=()
+        case $part in
+          a) parts=("/data") ;;
+          b) parts=("/system") ;;
+          c) parts=("/cache") ;;
+          d) parts=("/data" "/cache") ;;
+          e) parts=("/data" "/system" "/cache") ;;
+          *) echo "Invalid choice"; sleep 1; continue ;;
+        esac
+
+        local outfile="backup_$(date +%Y%m%d)_partitions.tar.gz"
+        read -r -p "Output file (default: $outfile): " user_out
+        outfile="${user_out:-$outfile}"
+
+        if [[ -f "$outfile" ]]; then
+          read -r -p "File exists. Overwrite? (y/n): " confirm
+          [[ ! "$confirm" =~ ^[Yy]$ ]] && continue
+        fi
+
+        echo "Backing up: ${parts[*]} -> $outfile"
+
+        local tar_cmd="su -c 'tar -czf - -C / ${parts[*]}'"
+        if adb shell "$tar_cmd" > "$outfile" 2>/dev/null; then
+          if [[ -s "$outfile" ]]; then
+            echo "Partition backup saved: $outfile"
+          else
+            echo "Backup failed: file is empty"
+            rm -f "$outfile"
+          fi
+        else
+          echo "Backup failed (tar error)"
+          rm -f "$outfile"
+        fi
+        sleep 2
+        ;;
+
+      # ========================================
+      # 2) ADB: APK Only
+      # 2R) ROOT: Extract APK from /data/app or /system/app
+      # ========================================
       2)
-        read -r -p "Package name: " pkg
-        [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]] && echo -e "${RED}Invalid package name${NC}" && sleep 1 && continue
+        echo -e "\nInstalled apps (user-installed):"
+        adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' | sort || { echo "Failed to list apps"; sleep 2; continue; }
+        echo
+
+        read -r -p "Enter package name: " pkg
+        [[ -z "$pkg" ]] && echo "Package name required" && sleep 1 && continue
+
+        if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+          echo "Invalid package name"
+          sleep 1
+          continue
+        fi
 
         if ! adb shell pm list packages | grep -q "package:$pkg"; then
-          echo -e "${RED}Package not found: $pkg${NC}"
+          echo "Package not found"
           sleep 1
           continue
         fi
 
-        read -r -p "Backup file name (e.g., ${pkg}_data.ab): " abfile
-        if ! [[ "$abfile" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-          echo -e "${RED}Invalid file name: $abfile${NC}"
+        local path=$(adb shell pm path "$pkg" | head -n1 | cut -d: -f2 | tr -d '\r')
+        if [[ -z "$path" ]]; then
+          echo "APK path not found"
           sleep 1
           continue
         fi
 
-        dir=$(dirname "$abfile")
-        [[ ! -w "$dir" ]] && echo -e "${RED}No write permission: $dir${NC}" && sleep 1 && continue
-
-        if [[ -f "$abfile" ]]; then
-          read -r -p "Overwrite? (y/n): " confirm
-          [[ "$confirm" != "y" && "$confirm" != "Y" ]] && echo -e "${RED}Backup cancelled.${NC}" && sleep 1 && continue
-        fi
-
-        touch "$abfile" 2>/dev/null || { echo -e "${RED}Cannot write to $abfile${NC}"; sleep 1; continue; }
-
-        check_device_connection || { sleep 1; continue; }
-
-        echo -e "${GREEN}Confirm on device within 30 seconds.${NC}"
-        timeout 30 adb backup -noapk -noshared "$pkg" -f "$abfile" || { echo -e "${RED}Backup failed${NC}"; rm -f "$abfile"; sleep 1; continue; }
-
-        if [[ ! -s "$abfile" ]]; then
-          echo -e "${RED}Backup file is empty${NC}"
-          rm -f "$abfile"
-          sleep 1
-          continue
-        fi
-
-        echo -e "${GREEN}App data backup saved as $abfile${NC}"
+        timeout 300 adb pull "$path" || echo "Failed to pull APK"
         sleep 2
         ;;
 
-      3)
-        read -r -p "Backup file path: " abfile
-        if ! [[ "$abfile" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-          echo -e "${RED}Invalid file path: $abfile${NC}"
+      2R)
+        if ! ensure_root; then continue; fi
+        echo -e "\nInstalled apps:"
+        adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' | sort
+        echo
+
+        read -r -p "Enter package name: " pkg
+        [[ -z "$pkg" ]] && echo "Package name required" && sleep 1 && continue
+
+        if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+          echo "Invalid package name"
           sleep 1
           continue
         fi
 
-        if [[ -f "$abfile" ]]; then
-          check_device_connection || { sleep 1; continue; }
-          adb restore "$abfile" || echo -e "${RED}Restore failed${NC}"
-          echo -e "${GREEN}Restore initiated for $abfile${NC}"
-          sleep 2
-        else
-          echo -e "${RED}File not found: $abfile${NC}"
-          sleep 1
+        # Try to locate APK in /data/app or /system
+        local apk_path=""
+        apk_path=$(adb shell "find /data/app -name '*$pkg*' -path '*/base.apk' | head -n1" 2>/dev/null | tr -d '\r')
+        if [[ -z "$apk_path" || "$apk_path" == *":"* ]]; then
+          apk_path=$(adb shell "find /system/app /system/priv-app -name '*$pkg*' -path '*/base.apk' | head -n1" 2>/dev/null | tr -d '\r')
         fi
+
+        if [[ -z "$apk_path" ]]; then
+          echo "APK not found for $pkg"
+          sleep 1
+          continue
+        fi
+
+        local outfile="${pkg##*.}.apk"
+        read -r -p "Save as (default: $outfile): " user_out
+        outfile="${user_out:-$outfile}"
+
+        if adb pull "$apk_path" "$outfile" 2>/dev/null; then
+          echo "APK extracted: $outfile"
+        else
+          echo "Failed to pull APK from $apk_path"
+        fi
+        sleep 2
         ;;
 
+      # ========================================
+      # 3) ADB: Data Only (often fails)
+      # 3R) ROOT: Tar /data/data/pkg
+      # ========================================
+      3)
+        echo
+        echo "Warning: 'Data only' backup may fail or produce 47-byte file"
+        echo "on Android 6+ due to system limitations."
+        read -r -p "Continue? (y/N): " confirm
+        [[ ! "$confirm" =~ ^[Yy]$ ]] && continue
+
+        echo -e "\nInstalled apps:"
+        adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' | sort
+        echo
+
+        read -r -p "Enter package name: " pkg
+        [[ -z "$pkg" ]] && echo "Package name required" && sleep 1 && continue
+
+        if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+          echo "Invalid package name"
+          sleep 1
+          continue
+        fi
+
+        if ! adb shell pm list packages | grep -q "package:$pkg"; then
+          echo "Package not found"
+          sleep 1
+          continue
+        fi
+
+        local abfile="${pkg##*.}_data_only_$(date +%Y%m%d).ab"
+        read -r -p "Output file (default: $abfile): " user_out
+        abfile="${user_out:-$abfile}"
+
+        if ! touch "$abfile" 2>/dev/null; then
+          echo "Cannot write to $abfile"
+          sleep 1
+          continue
+        fi
+
+        check_device_connection || continue
+
+        echo "Starting data-only backup. Confirm on device."
+        if ! timeout 60 adb backup -noapk -noshared -f "$abfile" "$pkg"; then
+          echo "Backup failed"
+          rm -f "$abfile"
+          continue
+        fi
+
+        if [[ ! -s "$abfile" ]]; then
+          echo "Backup is empty"
+          rm -f "$abfile"
+        else
+          echo "Backup saved: $abfile"
+        fi
+        sleep 2
+        ;;
+
+      3R)
+        if ! ensure_root; then continue; fi
+        echo -e "\nInstalled apps:"
+        adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' | sort
+        echo
+
+        read -r -p "Enter package name: " pkg
+        [[ -z "$pkg" ]] && echo "Package name required" && sleep 1 && continue
+
+        if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+          echo "Invalid package name"
+          sleep 1
+          continue
+        fi
+
+        local data_dir="/data/data/$pkg"
+        if ! adb shell "su -c 'test -d $data_dir'" &>/dev/null; then
+          echo "Data directory not found: $data_dir"
+          sleep 1
+          continue
+        fi
+
+        local outfile="${pkg##*.}_data_$(date +%Y%m%d).tar.gz"
+        read -r -p "Output file (default: $outfile): " user_out
+        outfile="${user_out:-$outfile}"
+
+        if [[ -f "$outfile" ]]; then
+          read -r -p "Overwrite? (y/n): " confirm
+          [[ ! "$confirm" =~ ^[Yy]$ ]] && continue
+        fi
+
+        echo "Backing up $data_dir -> $outfile"
+        if adb shell "su -c 'tar -czf - -C / $data_dir'" > "$outfile" 2>/dev/null; then
+          if [[ -s "$outfile" ]]; then
+            echo "Backup saved: $outfile"
+          else
+            echo "Backup failed: empty file"
+            rm -f "$outfile"
+          fi
+        else
+          echo "Backup failed (tar error)"
+          rm -f "$outfile"
+        fi
+        sleep 2
+        ;;
+
+      # ========================================
+      # 4) ADB: APK + Data
+      # 4R) ROOT: APK + Data in one tar.gz
+      # ========================================
       4)
-        echo -e "${GREEN}Available backups:${NC}"
-        ls -lh *.ab 2>/dev/null || echo -e "${RED}No backups found${NC}"
+        echo -e "\nInstalled apps:"
+        adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' | sort
+        echo
+
+        read -r -p "Enter package name: " pkg
+        [[ -z "$pkg" ]] && echo "Package name required" && sleep 1 && continue
+
+        if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+          echo "Invalid package name"
+          sleep 1
+          continue
+        fi
+
+        if ! adb shell pm list packages | grep -q "package:$pkg"; then
+          echo "Package not found"
+          sleep 1
+          continue
+        fi
+
+        local abfile="${pkg##*.}_apk_data_$(date +%Y%m%d).ab"
+        read -r -p "Output file (default: $abfile): " user_out
+        abfile="${user_out:-$abfile}"
+
+        if ! touch "$abfile" 2>/dev/null; then
+          echo "Cannot write to $abfile"
+          sleep 1
+          continue
+        fi
+
+        check_device_connection || continue
+
+        echo "Starting APK + Data backup. Confirm on device."
+        if ! timeout 60 adb backup -apk -noshared -f "$abfile" "$pkg"; then
+          echo "Backup failed"
+          rm -f "$abfile"
+          continue
+        fi
+
+        if [[ ! -s "$abfile" ]]; then
+          echo "Backup is empty"
+          rm -f "$abfile"
+        else
+          echo "Backup saved: $abfile"
+        fi
+        sleep 2
+        ;;
+
+      4R)
+        if ! ensure_root; then continue; fi
+        echo -e "\nInstalled apps:"
+        adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' | sort
+        echo
+
+        read -r -p "Enter package name: " pkg
+        [[ -z "$pkg" ]] && echo "Package name required" && sleep 1 && continue
+
+        if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+          echo "Invalid package name"
+          sleep 1
+          continue
+        fi
+
+        # Find APK path
+        local apk_path=$(adb shell "find /data/app -name '*$pkg*' -path '*/base.apk' | head -n1" | tr -d '\r')
+        if [[ -z "$apk_path" ]]; then
+          apk_path=$(adb shell "find /system/app /system/priv-app -name '*$pkg*' -path '*/base.apk' | head -n1" | tr -d '\r')
+        fi
+        local data_dir="/data/data/$pkg"
+
+        if [[ -z "$apk_path" && ! -d "/data/data/$pkg" ]]; then
+          echo "APK and data not found for $pkg"
+          sleep 1
+          continue
+        fi
+
+        local outfile="${pkg##*.}_apk_data_root_$(date +%Y%m%d).tar.gz"
+        read -r -p "Output file (default: $outfile): " user_out
+        outfile="${user_out:-$outfile}"
+
+        if [[ -f "$outfile" ]]; then
+          read -r -p "Overwrite? (y/n): " confirm
+          [[ ! "$confirm" =~ ^[Yy]$ ]] && continue
+        fi
+
+        echo "Creating combined APK + Data backup..."
+
+        local files_to_backup=()
+        [[ -n "$apk_path" ]] && files_to_backup+=("$apk_path")
+        adb shell "su -c 'test -d $data_dir'" &>/dev/null && files_to_backup+=("$data_dir")
+
+        if [[ ${#files_to_backup[@]} -eq 0 ]]; then
+          echo "Nothing to back up"
+          sleep 1
+          continue
+        fi
+
+        local tar_cmd="su -c 'tar -czf - -C / ${files_to_backup[*]}'"
+        if adb shell "$tar_cmd" > "$outfile" 2>/dev/null; then
+          if [[ -s "$outfile" ]]; then
+            echo "APK + Data backup saved: $outfile"
+          else
+            echo "Backup failed: empty file"
+            rm -f "$outfile"
+          fi
+        else
+          echo "Backup failed (tar error)"
+          rm -f "$outfile"
+        fi
+        sleep 2
+        ;;
+
+      # ========================================
+      # 5) ADB: Restore .ab
+      # 5R) ROOT: Restore data from tar.gz
+      # ========================================
+      5)
+        read -r -p "Enter .ab or .ab.gz file: " abfile
+        [[ -z "$abfile" ]] && echo "File required" && sleep 1 && continue
+
+        local source_file="$abfile"
+        local temp_file=""
+
+        if [[ "$abfile" == *.gz ]]; then
+          if [[ ! -f "$abfile" ]]; then
+            echo "File not found"
+            sleep 1
+            continue
+          fi
+          temp_file=$(mktemp --suffix=.ab || echo "/tmp/restore.ab")
+          if ! gzip -dc "$abfile" > "$temp_file"; then
+            echo "Decompression failed"
+            rm -f "$temp_file"
+            sleep 2
+            continue
+          fi
+          source_file="$temp_file"
+        elif [[ ! -f "$abfile" ]]; then
+          echo "File not found"
+          sleep 1
+          continue
+        fi
+
+        if [[ ! -s "$source_file" ]]; then
+          echo "Backup file is empty"
+          [[ -n "$temp_file" ]] && rm -f "$temp_file"
+          sleep 1
+          continue
+        fi
+
+        check_device_connection || { [[ -n "$temp_file" ]] && rm -f "$temp_file"; sleep 1; continue; }
+
+        echo "Starting restore. Confirm on device."
+        adb restore "$source_file" || echo "Restore failed"
+        [[ -n "$temp_file" ]] && rm -f "$temp_file"
+        sleep 3
+        ;;
+
+      5R)
+        if ! ensure_root; then continue; fi
+        read -r -p "Path to .tar.gz backup: " infile
+        [[ -z "$infile" ]] && echo "File path required" && sleep 1 && continue
+
+        if [[ ! -f "$infile" ]]; then
+          echo "File not found"
+          sleep 1
+          continue
+        fi
+
+        if [[ ! "$infile" =~ \.tar\.gz$ ]]; then
+          echo "Must be .tar.gz"
+          sleep 1
+          continue
+        fi
+
+        read -r -p "Target package name: " pkg
+        [[ -z "$pkg" ]] && echo "Package name required" && sleep 1 && continue
+
+        if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+          echo "Invalid package name"
+          sleep 1
+          continue
+        fi
+
+        if ! adb shell pm list packages | grep -q "package:$pkg"; then
+          echo "Package not installed"
+          sleep 1
+          continue
+        fi
+
+        local data_dir="/data/data/$pkg"
+        adb shell am force-stop "$pkg" || true
+
+        echo "Restoring $infile -> $data_dir"
+        if adb shell "su -c 'mkdir -p $data_dir && chmod 700 $data_dir && tar -xzf - -C /'" < "$infile" 2>/dev/null; then
+          adb shell "su -c 'chown -R $(adb shell stat -c '%u:%g' $data_dir) $data_dir && chmod -R 600 $data_dir/*'"
+          echo "Restore completed"
+        else
+          echo "Restore failed"
+        fi
+
+        adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
+        sleep 3
+        ;;
+
+      6)
+        echo "Available backups:"
+        local found=0
+        if ls *.ab *.ab.gz *.tar.gz 2>/dev/null | grep -q '.'; then
+          ls -lh *.ab *.ab.gz *.tar.gz 2>/dev/null
+          found=1
+        fi
+        if [[ $found -eq 0 ]]; then
+          echo "No backup files found (.ab, .ab.gz, .tar.gz)"
+        fi
         read -r -p "Press Enter to continue..."
         ;;
 
-      5)
+      7)
         break
         ;;
 
       *)
-        echo -e "${RED}Invalid choice.${NC}"
+        echo "Invalid choice. Use 1-7 or xR (e.g., 1R)"
         sleep 1
         ;;
     esac
@@ -1509,14 +1934,14 @@ category_app_mgmt() {
 category_backup() {
   clear
   while true; do
-    echo -e "${GREEN}\n Backup & Restore:${NC}"
+    echo -e "\nBackup & Restore:"
     echo "1) Apps Backup and Restore Tool"
     echo "2) Back to main menu"
     read -r -p "Choose (1-2): " c
     case $c in
       1) apps_backup_restore_tool ;;
       2) break ;;
-      *) echo -e "${RED}Invalid choice.${NC}" ;;
+      *) echo "Invalid choice." ;;
     esac
   done
 }
