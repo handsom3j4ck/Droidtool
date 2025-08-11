@@ -228,10 +228,4 @@ For issues, suggestions, or responsible disclosure, please open a GitHub Issue.
 
 ## 🏁 Disclaimer
 
-**Droidtool** and the **FRP Bypass Tool** are proof-of-concept utilities for device management and recovery. They are not designed to exploit vulnerabilities for unauthorized access, but to assist in legitimate scenarios such as:
-- Lost device recovery (with proof of ownership)
-- Forensic analysis
-- Penetration testing (authorized)
-- Android development
-
-**Always act responsibly. Unauthorized access is a crime.**
+**Always act responsibly.**
