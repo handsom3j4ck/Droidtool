@@ -6,6 +6,7 @@
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 NC='\033[0m'
 
 # Clean up ADB server on script termination
@@ -53,6 +54,9 @@ install_android_tools() {
   elif [ -f /etc/arch-release ]; then
     echo -e "${GREEN}Arch Linux detected. Installing...${NC}"
     sudo pacman -Sy --noconfirm android-tools || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
+  elif [ -f /etc/fedora-release ]; then
+    echo -e "${GREEN}Fedora detected. Installing...${NC}"
+    sudo dnf install -y android-tools || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
   else
     echo -e "${RED}Unsupported system. Please install android-tools manually.${NC}"
     exit 1
@@ -128,7 +132,7 @@ adb_wireless_pair() {
   read -r -p "Enter pairing port (e.g. 37521): " port
   read -r -p "Enter pairing code: " code
   adb pair "$port" "$code" || { echo -e "${RED}Pairing failed. Check port/code.${NC}"; return 1; }
-  echo -e "${GREEN}✅ Paired successfully! Now connect via IP.${NC}"
+  echo -e "${GREEN}Paired successfully! Now connect via IP.${NC}"
   sleep 2
 }
 
@@ -654,7 +658,7 @@ disable_bloatware() {
 
   echo
   read -r -p "Press Enter to continue..." _
-}  # ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←← CLOSE disable_bloatware()
+}
 
 # === Backup & Restore ===
 apps_backup_restore_tool() {
@@ -740,11 +744,9 @@ apps_backup_restore_tool() {
         if [[ ! -s "$abfile" ]]; then
           echo "Backup file is empty"
           rm -f "$abfile"
-          sleep 2
-          continue
+        else
+          echo "Backup saved: $abfile"
         fi
-
-        echo "Backup saved: $abfile"
 
         read -r -p "Compress with gzip? (y/n): " compress
         if [[ "$compress" =~ ^[Yy]$ ]]; then
@@ -1313,7 +1315,7 @@ logcat_save() {
   check_device_connection || return 1
 
   echo -e "${GREEN}Saving logcat to $fname. Press Ctrl+C to stop or wait 5 minutes.${NC}"
-  echo -e "${GREEN}👉 Confirm on device if prompted...${NC}"
+  echo -e "${GREEN}Confirm on device if prompted...${NC}"
 
   # Use 'adb logcat -d' to dump and exit (more reliable than timeout)
   if adb logcat -d > "$fname" 2>/dev/null; then
@@ -1673,7 +1675,7 @@ toggle_dark_mode() {
     *) echo -e "${RED}Invalid choice${NC}"; sleep 1; return 1 ;;
   esac
   adb shell cmd uimode apply
-  echo -e "${GREEN}🎨 Theme updated.${NC}"
+  echo -e "${GREEN}Theme updated.${NC}"
   sleep 2
 }
 
@@ -1878,7 +1880,7 @@ category_device_info() {
     echo "7) Check device status (needs root)"
     echo "8) Check root access (needs root)"
     echo "9) Show device model"
-	echo "10) Show foreground app"
+    echo "10) Show foreground app"
     echo "11) Show network info"
     echo "12) Back to main menu"
     read -r -p "Choose (1-12): " c
@@ -2001,7 +2003,7 @@ category_dev_tools() {
     echo "3) Open shell"
     echo "4) Take screenshot"
     echo "5) Change language & reboot (needs root)"
-	echo "6) Toggle dark mode (Android 10+)"
+    echo "6) Toggle dark mode (Android 10+)"
     echo "7) Back to main menu"
     read -r -p "Choose (1-7): " c
     case $c in
@@ -2015,6 +2017,29 @@ category_dev_tools() {
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
+}
+
+category_utilities() {
+  clear
+  while true; do
+    echo -e "${GREEN}\n Utilities:${NC}"
+    echo "1) Check for device updates"
+    echo "2) Back to main menu"
+    read -r -p "Choose (1-2): " c
+    case $c in
+      1) check_for_updates ;;
+      2) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+check_for_updates() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Checking for updates...${NC}"
+  adb shell am start -a android.settings.SYSTEM_UPDATE_SETTINGS || { echo -e "${RED}Failed to open update settings${NC}"; return 1; }
+  echo -e "${GREEN}Update settings opened on device. Check manually.${NC}"
+  sleep 2
 }
 
 # === Script start ===
