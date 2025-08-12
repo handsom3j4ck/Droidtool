@@ -4,16 +4,6 @@
 
 ---
 
-## 📦 Tool Overview
-
-| Tool | Purpose | Access Level Required |
-| --- | --- | --- |
-| **Droidtool** | Full Android device management via ADB | ADB access (root optional) |
-
-> 🔗 Requires `android-tools-adb`.
-
----
-
 ## 🛠️ Droidtool – Linux Android Management Tool
 
 ### ✅ Features
@@ -135,19 +125,6 @@ chmod +x droidtool
 2. Select connection method (USB, IP, or Wireless Pair)
 3. Navigate the menu to perform tasks
 4. Exit cleanly (option 9) to stop ADB server
-
----
-
-## 🛑 Troubleshooting
-
-| Issue | Solution |
-| --- | --- |
-| `adb: command not found` | Run script with `sudo` or install `android-tools-adb` manually |
-| `unauthorized` device | Accept ADB prompt on the device |
-| No device found | Ensure USB debugging is on; try `adb kill-server && adb start-server` |
-| Root commands fail | Device may not be rooted or `su` not installed |
-| File paths with spaces | Avoid spaces in paths; use underscores or hyphens |
-| `logcat` hangs | Use `Ctrl+C` to interrupt; use `logcat -d` for dump-only mode |
 
 ---
 
