@@ -947,8 +947,28 @@ delete_file() {
   local resolved_path="$remote_path"
   [[ "$resolved_path" == "/sdcard/"* ]] && resolved_path="/storage/emulated/0/${remote_path#/sdcard/}"
 
+  local use_root=false
+  local delete_desc="Deleting without root privileges"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Delete with root privileges? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      delete_desc="Deleting with root privileges"
+    fi
+  fi
+
+  echo -e "${GREEN}$delete_desc${NC}"
+
   # Check if file exists
-  if ! adb shell "test -f '$resolved_path' && echo exists" | grep -q "exists"; then
+  local exists_cmd
+  if $use_root; then
+    exists_cmd="su -c \"test -f '$resolved_path' && echo exists\""
+  else
+    exists_cmd="test -f '$resolved_path' && echo exists"
+  fi
+
+  if ! adb shell "$exists_cmd" | grep -q "exists"; then
     if adb shell "test -d '$resolved_path'"; then
       echo -e "${RED}Path is a directory. Use delete folder option instead.${NC}"
     else
@@ -965,7 +985,14 @@ delete_file() {
   fi
 
   # Attempt deletion
-  if adb shell rm -f "'$resolved_path'" 2>/dev/null; then
+  local delete_cmd
+  if $use_root; then
+    delete_cmd="su -c \"rm -f '$resolved_path' 2>/dev/null\""
+  else
+    delete_cmd="rm -f '$resolved_path' 2>/dev/null"
+  fi
+
+  if adb shell "$delete_cmd"; then
     echo -e "${GREEN}Successfully deleted: $resolved_path${NC}"
   else
     echo -e "${RED}Failed to delete: $resolved_path${NC}"
@@ -1044,8 +1071,28 @@ delete_folder() {
   local resolved_path="$remote_path"
   [[ "$resolved_path" == "/sdcard/"* ]] && resolved_path="/storage/emulated/0/${remote_path#/sdcard/}"
 
+  local use_root=false
+  local delete_desc="Deleting without root privileges"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Delete with root privileges? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      delete_desc="Deleting with root privileges"
+    fi
+  fi
+
+  echo -e "${GREEN}$delete_desc${NC}"
+
   # Check if folder exists
-  if ! adb shell "test -d '$resolved_path' && echo exists" | grep -q "exists"; then
+  local exists_cmd
+  if $use_root; then
+    exists_cmd="su -c \"test -d '$resolved_path' && echo exists\""
+  else
+    exists_cmd="test -d '$resolved_path' && echo exists"
+  fi
+
+  if ! adb shell "$exists_cmd" | grep -q "exists"; then
     if adb shell "test -f '$resolved_path'"; then
       echo -e "${RED}Path is a file. Use delete file option instead.${NC}"
     else
@@ -1062,7 +1109,14 @@ delete_folder() {
   fi
 
   # Delete
-  if adb shell rm -rf "'$resolved_path'" 2>/dev/null; then
+  local delete_cmd
+  if $use_root; then
+    delete_cmd="su -c \"rm -rf '$resolved_path' 2>/dev/null\""
+  else
+    delete_cmd="rm -rf '$resolved_path' 2>/dev/null"
+  fi
+
+  if adb shell "$delete_cmd"; then
     echo -e "${GREEN}Successfully deleted folder: $resolved_path${NC}"
   else
     echo -e "${RED}Failed to delete folder: $resolved_path${NC}"
