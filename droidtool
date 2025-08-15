@@ -411,8 +411,10 @@ install_single_apk() {
 
   # Check device Android version for install compatibility
   local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
-  if [[ "$sdk" -ge 35 ]]; then
-    echo -e "${YELLOW}Note: On Android 15+, apps targeting SDK <24 may not install.${NC}"
+  if [[ "$sdk" -ge 36 ]]; then
+    echo -e "${YELLOW}Note: On Android 16+, apps targeting SDK <25 may not install.${NC}"
+  elif [[ "$sdk" -ge 35 ]]; then
+    echo -e "${YELLOW}Note: On Android 15, apps targeting SDK <24 may not install.${NC}"
   fi
 
   timeout 300 adb install "$apk" || {
@@ -450,8 +452,10 @@ install_apk_folder() {
 
   # Check device Android version for install compatibility
   local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
-  if [[ "$sdk" -ge 35 ]]; then
-    echo -e "${YELLOW}Note: On Android 15+, apps targeting SDK <24 may not install.${NC}"
+  if [[ "$sdk" -ge 36 ]]; then
+    echo -e "${YELLOW}Note: On Android 16+, apps targeting SDK <25 may not install.${NC}"
+  elif [[ "$sdk" -ge 35 ]]; then
+    echo -e "${YELLOW}Note: On Android 15, apps targeting SDK <24 may not install.${NC}"
   fi
 
   for f in "${files[@]}"; do
