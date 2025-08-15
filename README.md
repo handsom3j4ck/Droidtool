@@ -114,7 +114,7 @@ chmod +x droidtool
 ./droidtool
 ```
 
-> 💡 The script will auto-install `android-tools-adb` if missing (Debian/Ubuntu/Arch/Fedora only).
+> 💡 The script will auto-install `android-tools-adb` if missing (Debian/Ubuntu/Arch/Fedora/RedHat).
 
 ---
 
