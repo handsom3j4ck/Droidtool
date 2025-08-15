@@ -1071,6 +1071,16 @@ delete_folder() {
   read -r -p "Press Enter to return..."
 }
 
+# Helper function to check if device is rooted
+is_rooted() {
+  local test=$(adb shell "su -c 'echo yes' 2>/dev/null" | tr -d '\r')
+  if [[ "$test" == "yes" ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 # Search for folders on device
 find_folder() {
   check_device_connection || return 1
@@ -1080,32 +1090,48 @@ find_folder() {
     return 1
   fi
 
-  # Sanitize fname for find command (escape special chars)
+  # Sanitize fname for find command (escape special chars for single-quoted context)
   fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\\\''/g")
 
-  echo -e "${GREEN}Searching for folders matching: $fname${NC}"
-  echo -e "${GREEN}In: /storage/emulated/0, /sdcard, /Download, /DCIM, /Documents${NC}"
-
+  local use_root=false
   local search_paths="/storage/emulated/0 /sdcard /Download /DCIM /Documents"
+  local search_desc="In: /storage/emulated/0, /sdcard, /Download, /DCIM, /Documents"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (expanded to entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  echo -e "${GREEN}Searching for folders matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
 
   local results
-  results=$(adb shell "for path in $search_paths; do
-                      if [ -d \"\$path\" ]; then
-                        find \"\$path\" -name '$fname_escaped' -type d 2>/dev/null
-                      fi
-                    done" | tr -d '\r')
+  if $use_root; then
+    results=$(adb shell "su -c \"find / -name '$fname_escaped' -type d 2>/dev/null\"" | tr -d '\r')
+  else
+    results=$(adb shell "for path in $search_paths; do
+                        if [ -d \"\$path\" ]; then
+                          find \"\$path\" -name '$fname_escaped' -type d 2>/dev/null
+                        fi
+                      done" | tr -d '\r')
+  fi
 
   if [[ -n "$results" ]]; then
     echo "$results"
     local count=$(echo "$results" | wc -l)
     echo -e "${GREEN}Search complete. Found $count folder(s).${NC}"
   else
-    echo -e "${YELLOW}No folders found matching '$fname' in common storage directories.${NC}"
+    echo -e "${YELLOW}No folders found matching '$fname' in searched directories.${NC}"
   fi
 
   read -r -p "Press Enter to return..."
 }
 
+# Search for files on device
 search_device_files() {
   check_device_connection || return 1
   read -r -p "Enter filename to search (use * for wildcard, e.g. '*.mp4'): " fname
@@ -1114,25 +1140,42 @@ search_device_files() {
     return 1
   fi
 
-  # Sanitize fname
+  # Sanitize fname for find command (escape special chars for single-quoted context)
   fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\\\''/g")
 
-  echo -e "${GREEN}Searching for files matching: $fname${NC}"
+  local use_root=false
   local search_paths="/storage/emulated/0 /sdcard /Download /DCIM /Documents"
+  local search_desc="In: /storage/emulated/0, /sdcard, /Download, /DCIM, /Documents"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (expanded to entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  echo -e "${GREEN}Searching for files matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
 
   local results
-  results=$(adb shell "for path in $search_paths; do
-                      if [ -d \"\$path\" ]; then
-                        find \"\$path\" -name '$fname_escaped' -type f 2>/dev/null
-                      fi
-                    done" | tr -d '\r')
+  if $use_root; then
+    results=$(adb shell "su -c \"find / -name '$fname_escaped' -type f 2>/dev/null\"" | tr -d '\r')
+  else
+    results=$(adb shell "for path in $search_paths; do
+                        if [ -d \"\$path\" ]; then
+                          find \"\$path\" -name '$fname_escaped' -type f 2>/dev/null
+                        fi
+                      done" | tr -d '\r')
+  fi
 
   if [[ -n "$results" ]]; then
     echo "$results"
     local count=$(echo "$results" | wc -l)
     echo -e "${GREEN}Search complete. Found $count file(s).${NC}"
   else
-    echo -e "${YELLOW}No files found matching '$fname'.${NC}"
+    echo -e "${YELLOW}No files found matching '$fname' in searched directories.${NC}"
   fi
 
   read -r -p "Press Enter to return..."
