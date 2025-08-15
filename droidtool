@@ -57,6 +57,9 @@ install_android_tools() {
   elif [ -f /etc/fedora-release ]; then
     echo -e "${GREEN}Fedora detected. Installing...${NC}"
     sudo dnf install -y android-tools || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
+  elif [ -f /etc/redhat-release ] || [ -f /etc/centos-release ]; then
+    echo -e "${GREEN}Red Hat/CentOS detected. Installing...${NC}"
+    sudo yum install -y android-tools || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
   else
     echo -e "${RED}Unsupported system. Please install android-tools manually.${NC}"
     exit 1
@@ -182,41 +185,45 @@ show_device_report() {
   # === Battery ===
   echo -e "${GREEN}Battery Status${NC}"
   local battery=$(adb shell dumpsys battery 2>/dev/null)
-  local level=$(echo "$battery" | grep "level" | awk '{print $2}')
-  local status=$(echo "$battery" | grep "status" | awk '{print $2}')
-  local health=$(echo "$battery" | grep "health" | awk '{print $2}')
-  local temp_raw=$(echo "$battery" | grep "temperature" | awk '{print $2}')
-  local temp="?"
+  if [[ -z "$battery" ]]; then
+    echo "  Failed to retrieve battery info"
+  else
+    local level=$(echo "$battery" | grep "level" | awk '{print $2}')
+    local status=$(echo "$battery" | grep "status" | awk '{print $2}')
+    local health=$(echo "$battery" | grep "health" | awk '{print $2}')
+    local temp_raw=$(echo "$battery" | grep "temperature" | awk '{print $2}')
+    local temp="?"
 
-  # Only process temp if value is numeric
-  if [[ "$temp_raw" =~ ^[0-9]+$ ]]; then
-    temp=$(awk "BEGIN {printf \"%.1f\", $temp_raw / 10}")
+    # Only process temp if value is numeric
+    if [[ "$temp_raw" =~ ^[0-9]+$ ]]; then
+      temp=$(awk "BEGIN {printf \"%.1f\", $temp_raw / 10}")
+    fi
+
+    case $status in
+      1) status="Unknown" ;;
+      2) status="Charging" ;;
+      3) status="Discharging" ;;
+      4) status="Not Charging" ;;
+      5) status="Full" ;;
+      *) status="Unknown" ;;
+    esac
+
+    case $health in
+      1) health="Unknown" ;;
+      2) health="Good" ;;
+      3) health="Overheat" ;;
+      4) health="Dead" ;;
+      5) health="Over Voltage" ;;
+      6) health="Unspecified Failure" ;;
+      7) health="Cold" ;;
+      *) health="Unknown" ;;
+    esac
+
+    echo "  Level:     ${level:-?}%"
+    echo "  Status:    $status"
+    echo "  Health:    $health"
+    echo "  Temp:      ${temp}°C"
   fi
-
-  case $status in
-    1) status="Unknown" ;;
-    2) status="Charging" ;;
-    3) status="Discharging" ;;
-    4) status="Not Charging" ;;
-    5) status="Full" ;;
-    *) status="Unknown" ;;
-  esac
-
-  case $health in
-    1) health="Unknown" ;;
-    2) health="Good" ;;
-    3) health="Overheat" ;;
-    4) health="Dead" ;;
-    5) health="Over Voltage" ;;
-    6) health="Unspecified Failure" ;;
-    7) health="Cold" ;;
-    *) health="Unknown" ;;
-  esac
-
-  echo "  Level:     ${level:-?}%"
-  echo "  Status:    $status"
-  echo "  Health:    $health"
-  echo "  Temp:      ${temp}°C"
   echo
 
   # === Storage ===
@@ -763,7 +770,7 @@ logcat_viewer() {
     return 1
   fi
   check_device_connection || return 1
-  trap 'echo -e "${RED}Logcat interrupted${NC}"; return 1' SIGINT
+  trap 'echo -e "${RED}Logcat interrupted${NC}"; trap - SIGINT; return 1' SIGINT
   if [[ -z "$filter" ]]; then
     adb logcat || { echo -e "${RED}Failed to display logcat${NC}"; return 1; }
   else
@@ -887,7 +894,7 @@ pull_file() {
   [[ "$resolved_src" == "/sdcard/"* ]] && resolved_src="/storage/emulated/0/${src#/sdcard/}"
 
   echo -e "${GREEN}Pulling $resolved_src -> $dst...${NC}"
-  if ! adb pull "$resolved_src" "$dst"; then
+  if ! timeout 300 adb pull "$resolved_src" "$dst"; then
     echo -e "${RED}Failed to pull $resolved_src${NC}"
     return 1
   fi
@@ -916,7 +923,7 @@ push_file() {
   fi
 
   echo -e "${GREEN}Pushing $src -> $dst...${NC}"
-  if ! adb push "$src" "$dst"; then
+  if ! timeout 300 adb push "$src" "$dst"; then
     echo -e "${RED}Failed to push $src${NC}"
     return 1
   fi
@@ -984,7 +991,7 @@ pull_folder() {
   [[ "$resolved_src" == "/sdcard/"* ]] && resolved_src="/storage/emulated/0/${src#/sdcard/}"
 
   echo -e "${GREEN}Pulling folder: $resolved_src -> $dst...${NC}"
-  if ! adb pull "$resolved_src" "$dst"; then
+  if ! timeout 600 adb pull "$resolved_src" "$dst"; then
     echo -e "${RED}Failed to pull folder: $resolved_src${NC}"
     return 1
   fi
@@ -1013,7 +1020,7 @@ push_folder() {
   fi
 
   echo -e "${GREEN}Pushing folder: $src -> $dst...${NC}"
-  if ! adb push "$src" "$dst"; then
+  if ! timeout 600 adb push "$src" "$dst"; then
     echo -e "${RED}Failed to push folder: $src${NC}"
     return 1
   fi
@@ -1178,8 +1185,9 @@ custom_settings_menu() {
     echo "6) One klick Cache clean"
     echo "7) Check for TV device updates"
     echo "8) Remove ads (could require root)"
-    echo "9) Back to main menu"
-    read -r -p "Choose (1-9): " c
+    echo "9) Delete app data and cache (per app)"
+    echo "10) Back to main menu"
+    read -r -p "Choose (1-10): " c
     case $c in
       1) apply_general_performance_improvements ;;
       2) enable_processing_speed_management ;;
@@ -1189,7 +1197,8 @@ custom_settings_menu() {
       6) clear_cache_all ;;
       7) check_for_updates ;;
       8) remove_ads ;;
-      9) break ;;
+      9) delete_app_data_cache ;;
+      10) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1219,7 +1228,7 @@ delete_cache_memory() {
   check_root_access || return 1
   echo -e "${GREEN}Deleting cache memory for all apps...${NC}"
   if ! adb shell "su -c 'pm trim-caches 1024M'" &>/dev/null; then
-    echo -e "${RED}Failed to clear cache. Root access may be unavailable.${NC}"
+    echo -e "${RED}Failed to clear cache. Root access may be unavailable or command not supported.${NC}"
     return 1
   fi
   echo -e "${GREEN}Cache memory deleted.${NC}"
@@ -1263,9 +1272,16 @@ delete_app_data_cache() {
     return 1
   fi
 
+  # Confirm deletion (added for safety)
+  read -r -p "This will delete ALL data and cache for $pkg (user 0). Confirm? (y/N): " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Operation canceled.${NC}"
+    return 0
+  fi
+
   # Clear data in user 0 context
   adb shell pm clear --user 0 "$pkg" || {
-    echo -e "${RED}Failed to clear data for $pkg (permission/user issue)${NC}"
+    echo -e "${RED}Failed to clear data for $pkg (permission/user issue or command not supported)${NC}"
     return 1
   }
 
