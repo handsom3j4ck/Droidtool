@@ -128,7 +128,7 @@ connect_ip() {
   return 1
 }
 
-#One-Click ADB Wireless Pairing (Android 11+)
+# One-Click ADB Wireless Pairing (Android 11+)
 adb_wireless_pair() {
   echo -e "${GREEN}Ensure device is on the same Wi-Fi and has 'Pair over Wi-Fi' enabled.${NC}"
   echo -e "${YELLOW}Settings > Developer options > ADB over network > Pairing${NC}"
@@ -352,7 +352,7 @@ show_check_root() {
   read -r -p "Press Enter to return..."
 }
 
-#Auto-Detect Connected Device Model
+# Auto-Detect Connected Device Model
 show_device_model() {
   check_device_connection || return 1
   model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' | xargs)
@@ -361,7 +361,7 @@ show_device_model() {
   read -r -p "Press Enter to return..."
 }
 
-#List Running Apps (Foreground App)
+# List Running Apps (Foreground App)
 show_foreground_app() {
   check_device_connection || return 1
   echo -e "${GREEN}Foreground App (currently on screen):${NC}"
@@ -374,7 +374,7 @@ show_foreground_app() {
   read -r -p "Press Enter to return..."
 }
 
-#Show Network Info
+# Show Network Info
 show_network_info() {
   check_device_connection || return 1
   echo -e "${GREEN}Network Information:${NC}"
@@ -742,13 +742,13 @@ sideload_zip() {
   fi
 
   # Check ADB state
-  if ! adb get-state | grep -q "recovery"; then
-    echo -e "${RED}Device is not in recovery mode. Please boot into recovery first.${NC}"
-    return 1
-  fi
-
-  if ! adb devices | grep -q "sideload"; then
-    echo -e "${RED}Device is not in sideload mode. Please enable ADB sideload in recovery.${NC}"
+  state=$(adb get-state 2>/dev/null)
+  if [[ "$state" != "sideload" ]]; then
+    if [[ "$state" == "recovery" ]]; then
+      echo -e "${RED}Device is in recovery but not sideload mode. Please enable ADB sideload in recovery.${NC}"
+    else
+      echo -e "${RED}Device is not in recovery or sideload mode. Please boot into recovery first.${NC}"
+    fi
     return 1
   fi
 
@@ -873,6 +873,16 @@ screenshot() {
     return 1
   fi
   read -r -p "Press Enter to return..."
+}
+
+# Helper function to check if device is rooted
+is_rooted() {
+  local test=$(adb shell "su -c 'echo yes' 2>/dev/null" | tr -d '\r')
+  if [[ "$test" == "yes" ]]; then
+    return 0
+  else
+    return 1
+  fi
 }
 
 # pull and push function
@@ -1125,16 +1135,6 @@ delete_folder() {
   read -r -p "Press Enter to return..."
 }
 
-# Helper function to check if device is rooted
-is_rooted() {
-  local test=$(adb shell "su -c 'echo yes' 2>/dev/null" | tr -d '\r')
-  if [[ "$test" == "yes" ]]; then
-    return 0
-  else
-    return 1
-  fi
-}
-
 # Search for folders on device
 find_folder() {
   check_device_connection || return 1
@@ -1237,20 +1237,20 @@ search_device_files() {
 
 # Requires root access
 change_device_language() {
-  read -r -p "Language code (e.g. en, de): " lang
-  if [[ ! "$lang" =~ ^[a-z]{2}$ ]]; then
-    echo -e "${RED}Invalid language code: $lang (use 2-letter ISO 639-1 code, e.g., en, de)${NC}"
+  read -r -p "Locale code (e.g. en-US, de-DE): " locale
+  if [[ ! "$locale" =~ ^[a-z]{2}-[A-Z]{2}$ ]]; then
+    echo -e "${RED}Invalid locale code: $locale (use 2-letter lang-2-letter country, e.g., en-US, de-DE)${NC}"
     return 1
   fi
   check_device_connection || return 1
   check_root_access || return 1
-  adb shell setprop persist.sys.language "$lang" || { echo -e "${RED}Failed to set language${NC}"; return 1; }
-  echo -e "${GREEN}Language changed to $lang, rebooting device...${NC}"
+  adb shell setprop persist.sys.locale "$locale" || { echo -e "${RED}Failed to set locale${NC}"; return 1; }
+  echo -e "${GREEN}Locale changed to $locale, rebooting device...${NC}"
   adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; }
   read -r -p "Press Enter to return..."
 }
 
-#Toggle Dark Mode (Android 10+)
+# Toggle Dark Mode (Android 10+)
 toggle_dark_mode() {
   check_device_connection || return 1
   echo -e "${GREEN}Toggle System Dark Mode (Android 10+)${NC}"
@@ -1279,7 +1279,7 @@ custom_settings_menu() {
     echo "3) Delete cache memory (needs root)"
     echo "4) Optimize application performance"
     echo "5) Close apps in the background"
-    echo "6) One klick Cache clean"
+    echo "6) One click Cache clean"
     echo "7) Check for TV device updates"
     echo "8) Remove ads (could require root)"
     echo "9) Delete app data and cache (per app)"
