@@ -39,11 +39,6 @@
 - Search for files or folders on device
 - Supports `/storage/emulated/0/` and common directories like `/sdcard`, `/Download`, `/DCIM`, `/Documents`
 
-#### 🔁 Reboot & Recovery
-
-- Reboot to system, recovery, bootloader, or fastboot
-- Sideload ZIP files in recovery mode
-
 #### 🧪 Developer Tools
 
 - View and save `logcat` output
