@@ -95,7 +95,7 @@ connect_usb() {
 
 connect_ip() {
   read -r -p "Enter device IP address: " device_ip
-  if [[ ! "$device_ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || \
+  if [[ ! "$device_ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] ||
      [[ ${BASH_REMATCH[1]} -gt 255 || ${BASH_REMATCH[2]} -gt 255 || ${BASH_REMATCH[3]} -gt 255 || ${BASH_REMATCH[4]} -gt 255 ]]; then
     echo -e "${RED}Invalid IP address format or range: $device_ip${NC}"
     return 1
@@ -129,9 +129,9 @@ connect_ip() {
 adb_wireless_pair() {
   echo -e "${GREEN}Ensure device is on the same Wi-Fi and has 'Pair over Wi-Fi' enabled.${NC}"
   echo -e "${YELLOW}Settings > Developer options > ADB over network > Pairing${NC}"
-  read -r -p "Enter pairing port (e.g. 37521): " port
+  read -r -p "Enter pairing IP and port (e.g. 192.168.1.100:37521): " ip_port
   read -r -p "Enter pairing code: " code
-  adb pair "$port" "$code" || { echo -e "${RED}Pairing failed. Check port/code.${NC}"; return 1; }
+  adb pair "$ip_port" "$code" || { echo -e "${RED}Pairing failed. Check IP:port/code.${NC}"; return 1; }
   echo -e "${GREEN}Paired successfully! Now connect via IP.${NC}"
   sleep 2
 }
@@ -142,7 +142,7 @@ connection_menu() {
   echo "2) IP"
   echo "3) ADB Wireless Pair (Android 11+)"
   echo "4) Exit"
-  read -r -p "Choose (1-3): " c
+  read -r -p "Choose (1-4): " c
   case $c in
     1) connect_usb || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
     2) connect_ip || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
@@ -156,6 +156,7 @@ connection_menu() {
 disconnect_device() { 
   check_device_connection || return 1
   adb disconnect || { echo -e "${RED}Failed to disconnect device${NC}"; return 1; }; 
+  echo -e "${GREEN}Device disconnected.${NC}"
 }
 
 show_device_report() {
@@ -193,16 +194,28 @@ show_device_report() {
   fi
 
   case $status in
+    1) status="Unknown" ;;
     2) status="Charging" ;;
-    3) status="Charging (Full)" ;;
+    3) status="Discharging" ;;
     4) status="Not Charging" ;;
-    5) status="Discharging" ;;
+    5) status="Full" ;;
     *) status="Unknown" ;;
+  esac
+
+  case $health in
+    1) health="Unknown" ;;
+    2) health="Good" ;;
+    3) health="Overheat" ;;
+    4) health="Dead" ;;
+    5) health="Over Voltage" ;;
+    6) health="Unspecified Failure" ;;
+    7) health="Cold" ;;
+    *) health="Unknown" ;;
   esac
 
   echo "  Level:     ${level:-?}%"
   echo "  Status:    $status"
-  echo "  Health:    ${health:-?}"
+  echo "  Health:    $health"
   echo "  Temp:      ${temp}°C"
   echo
 
@@ -231,6 +244,7 @@ show_device_report() {
       ssid="Not connected"
     fi
     signal=$(echo "$ssid_line" | grep -o 'RSSI: [^,]*' | cut -d: -f2 | xargs)
+    signal="${signal} dBm"
   fi
 
   echo "  IP:        ${ip:-Unknown}"
@@ -246,7 +260,7 @@ show_device_report() {
   fi
   [[ -z "$cpu" ]] && cpu="Unknown"
 
-  local gpu=$(adb shell getprop ro.product.gpu 2>/dev/null | tr -d '\r' | xargs)
+  local gpu=$(adb shell getprop ro.opengles.version 2>/dev/null | tr -d '\r' | xargs)
   [[ -z "$gpu" ]] && gpu="Unknown"
 
   echo "  CPU:       $cpu"
@@ -265,6 +279,7 @@ show_battery_health() {
     return 1
   fi
   echo "$output"
+  read -r -p "Press Enter to return..."
 }
 
 show_storage_usage() { 
@@ -275,6 +290,7 @@ show_storage_usage() {
     return 1
   fi
   echo "$output"
+  read -r -p "Press Enter to return..."
 }
 
 # Requires root access
@@ -287,6 +303,7 @@ show_cpu_mem_usage() {
     return 1
   fi
   echo "$output"
+  read -r -p "Press Enter to return..."
 }
 
 show_uptime() { 
@@ -297,6 +314,7 @@ show_uptime() {
     return 1
   fi
   echo "$output"
+  read -r -p "Press Enter to return..."
 }
 
 # Requires root access
@@ -316,13 +334,15 @@ device_test_status() {
   echo "$netstats_output"
   echo -e "${GREEN}Power Status:${NC}"
   echo "$power_output"
+  read -r -p "Press Enter to return..."
 }
 
 # Requires root access
-grow_check_root() {
+show_check_root() {
   check_device_connection || return 1
   check_root_access || return 1
   echo -e "${GREEN}Root access is available.${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 #Auto-Detect Connected Device Model
@@ -331,7 +351,7 @@ show_device_model() {
   model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' | xargs)
   brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
   echo -e "${GREEN}Device: $brand $model${NC}"
-  read -r -p "Press Enter to continue..."
+  read -r -p "Press Enter to return..."
 }
 
 #List Running Apps (Foreground App)
@@ -344,7 +364,7 @@ show_foreground_app() {
   else
     echo "No active app detected"
   fi
-  read -r -p "Press Enter to continue..."
+  read -r -p "Press Enter to return..."
 }
 
 #Show Network Info
@@ -352,23 +372,34 @@ show_network_info() {
   check_device_connection || return 1
   echo -e "${GREEN}Network Information:${NC}"
   ip=$(adb shell ip route 2>/dev/null | awk '{print $9}' | head -n1 | tr -d '\r')
-  ssid=$(adb shell dumpsys wifi 2>/dev/null | grep 'mWifiInfo' | grep -o 'SSID:[^,]*' | cut -d: -f2- | tr -d '\r' | sed 's/^ *//')
-  signal=$(adb shell dumpsys wifi 2>/dev/null | grep 'Link speed' | head -n1 | tr -d '\r')
+  ssid_line=$(adb shell dumpsys wifi 2>/dev/null | grep "mWifiInfo" | head -n1)
+  local ssid="Not connected"
+  local signal="N/A"
+
+  if [[ -n "$ssid_line" ]]; then
+    ssid=$(echo "$ssid_line" | grep -o 'SSID:[^,]*' | cut -d: -f2- | sed 's/^ *//' | tr -d '\r')
+    if [[ "$ssid" == "null" || -z "$ssid" ]]; then
+      ssid="Not connected"
+    fi
+    signal=$(echo "$ssid_line" | grep -o 'RSSI: [^,]*' | cut -d: -f2 | xargs)
+    signal="${signal} dBm"
+  fi
+
   echo "IP Address: ${ip:-Unknown}"
-  echo "Wi-Fi SSID: ${ssid:-Not connected}"
-  echo "Signal: ${signal:-N/A}"
-  read -r -p "Press Enter to continue..."
+  echo "Wi-Fi SSID: $ssid"
+  echo "Signal: $signal"
+  read -r -p "Press Enter to return..."
 }
 
 # === App Management ===
 install_single_apk() {
   read -r -p "Path to APK: " apk
 
-  # Use a temporary approach: check for forbidden characters using grep
-  echo -n "$apk" | grep -q '[[:space:]*?|;&'"'"'\"`]' && {
-    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $apk${NC}"
+  # Sanitize: check for forbidden characters
+  if echo "$apk" | grep -q '[[:space:]*?|;&'"'"'\"`$;]'; then
+    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`, $): $apk${NC}"
     return 1
-  }
+  fi
 
   if [[ ! -f "$apk" ]]; then
     echo -e "${RED}File not found: $apk${NC}"
@@ -381,16 +412,18 @@ install_single_apk() {
     echo -e "${RED}Failed to install $apk${NC}"
     return 1
   }
+  echo -e "${GREEN}APK installed successfully.${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 install_apk_folder() {
   read -r -p "APK folder: " dir
 
-  # Use grep to detect invalid characters (safe from syntax errors)
-  echo -n "$dir" | grep -q '[[:space:]*?|;&'"'"'\"`]' && {
-    echo -e "${RED}Folder path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $dir${NC}"
+  # Sanitize folder path
+  if echo "$dir" | grep -q '[[:space:]*?|;&'"'"'\"`$;]'; then
+    echo -e "${RED}Folder path contains invalid characters: $dir${NC}"
     return 1
-  }
+  fi
 
   if [[ ! -d "$dir" ]]; then
     echo -e "${RED}Folder not found: $dir${NC}"
@@ -409,13 +442,14 @@ install_apk_folder() {
   check_device_connection || return 1
 
   for f in "${files[@]}"; do
-    if [[ "$f" =~ [[:space:]] ]]; then
-      echo -e "${RED}Skipping file with spaces in path: $f${NC}"
+    if echo "$f" | grep -q '[[:space:]*?|;&'"'"'\"`$;]'; then
+      echo -e "${RED}Skipping file with invalid characters in path: $f${NC}"
       continue
     fi
     echo -e "${GREEN}Installing $f...${NC}"
     timeout 300 adb install "$f" || { echo -e "${RED}Failed to install $f${NC}"; continue; }
   done
+  read -r -p "Press Enter to return..."
 }
 
 uninstall_app() {
@@ -430,7 +464,7 @@ uninstall_app() {
   echo
   read -r -p "Package name to uninstall: " pkg
 
-  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     echo -e "${RED}Invalid package name: $pkg${NC}"
     return 1
   fi
@@ -447,6 +481,7 @@ uninstall_app() {
   }
 
   echo -e "${GREEN}Successfully uninstalled $pkg for current user.${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 batch_uninstall() {
@@ -460,7 +495,7 @@ batch_uninstall() {
   echo -e "\nEnter packages to uninstall (space separated):"
   read -r -a pkgs
   for pkg in "${pkgs[@]}"; do
-    if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+    if [[ ! "$pkg" =~ ^[a-zA-Z0-9._-]+$ ]]; then
       echo -e "${RED}Skipping invalid package name: $pkg${NC}"
       continue
     fi
@@ -474,11 +509,12 @@ batch_uninstall() {
     }
     echo -e "${GREEN}Uninstalled: $pkg${NC}"
   done
+  read -r -p "Press Enter to return..."
 }
 
 enable_disable_app() {
   read -r -p "Package name: " pkg
-  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     echo -e "${RED}Invalid package name: $pkg${NC}"
     return 1
   fi
@@ -491,7 +527,7 @@ enable_disable_app() {
   read -r -p "Choice: " action
   case $action in
     1)
-      adb shell am --user 0 enable "$pkg" || {
+      adb shell pm enable --user 0 "$pkg" || {
         echo -e "${RED}Failed to enable $pkg (may require root or system-level access)${NC}"
         return 1
       }
@@ -508,6 +544,7 @@ enable_disable_app() {
       echo -e "${RED}Invalid choice.${NC}"
       ;;
   esac
+  read -r -p "Press Enter to return..."
 }
 
 # Requires root access
@@ -520,12 +557,13 @@ clear_cache_all() {
     return 1
   fi
   echo -e "${GREEN}Cache cleared successfully.${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 extract_apk() {
   read -r -p "Package name: " pkg
 
-  if ! [[ "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+  if ! [[ "$pkg" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     echo -e "${RED}Invalid package name: $pkg${NC}"
     return 1
   fi
@@ -540,7 +578,7 @@ extract_apk() {
   path=$(adb shell pm path "$pkg" | awk -F':' '{print $2}' | tr -d '\r' | head -n 1)
 
   if [[ $(adb shell pm path "$pkg" | wc -l) -gt 1 ]]; then
-    echo -e "${RED}Warning: Multiple APKs found for $pkg. Pulling first one.${NC}"
+    echo -e "${YELLOW}Warning: Multiple APKs found for $pkg. Pulling first one.${NC}"
   fi
 
   if [[ -z "$path" ]]; then
@@ -548,9 +586,9 @@ extract_apk() {
     return 1
   fi
 
-  # Allow only safe path characters: letters, numbers, /, ., _, -, ~
+  # Sanitize path
   if ! [[ "$path" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}APK path contains invalid characters (spaces, *, ?, |, ;, &, etc.): $path${NC}"
+    echo -e "${RED}APK path contains invalid characters: $path${NC}"
     return 1
   fi
 
@@ -558,6 +596,8 @@ extract_apk() {
     echo -e "${RED}Failed to pull APK for $pkg${NC}"
     return 1
   }
+  echo -e "${GREEN}APK extracted successfully.${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 # Requires root access
@@ -605,6 +645,7 @@ push_as_system_app() {
       return 1
     }
   fi
+  read -r -p "Press Enter to return..."
 }
 
 disable_bloatware() {
@@ -634,18 +675,13 @@ disable_bloatware() {
       continue
     fi
 
-    if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+    if [[ ! "$pkg" =~ ^[a-zA-Z0-9._-]+$ ]]; then
       echo -e "${RED}Invalid package name: $pkg${NC}"
       continue
     fi
 
     if ! adb shell pm list packages | grep -q "package:$pkg"; then
       echo -e "${RED}Package not found: $pkg${NC}"
-      continue
-    fi
-
-    if adb shell pm list packages -e | grep -q "package:$pkg"; then
-      echo -e "${YELLOW}Package is already disabled: $pkg${NC}"
       continue
     fi
 
@@ -656,8 +692,7 @@ disable_bloatware() {
     fi
   done
 
-  echo
-  read -r -p "Press Enter to continue..." _
+  read -r -p "Press Enter to return..."
 }
 
 # === Reboot & Recovery ===
@@ -673,17 +708,18 @@ reboot_menu() {
     1) adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; } ;;
     2) adb reboot recovery || { echo -e "${RED}Failed to reboot to recovery${NC}"; return 1; } ;;
     3) adb reboot bootloader || { echo -e "${RED}Failed to reboot to bootloader${NC}"; return 1; } ;;
-    4) adb shell reboot fastboot || { echo -e "${RED}Failed to reboot to fastboot mode${NC}"; return 1; } ;;
+    4) adb reboot fastboot || { echo -e "${RED}Failed to reboot to fastboot mode${NC}"; return 1; } ;;
     *) echo -e "${RED}Invalid choice${NC}" ;;
   esac
+  read -r -p "Press Enter to return..."
 }
 
 sideload_zip() {
   read -r -p "ZIP file path: " zip
 
-  # Allow only safe characters in the file path
+  # Sanitize
   if ! [[ "$zip" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`): $zip${NC}"
+    echo -e "${RED}File path contains invalid characters: $zip${NC}"
     return 1
   fi
 
@@ -716,6 +752,7 @@ sideload_zip() {
   }
 
   echo -e "${GREEN}Sideload completed successfully.${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 # === Developer Tools ===
@@ -732,6 +769,7 @@ logcat_viewer() {
   else
     adb logcat | grep -- "$filter" || { echo -e "${RED}Failed to display filtered logcat${NC}"; return 1; }
   fi
+  read -r -p "Press Enter to return..."
 }
 
 logcat_save() {
@@ -746,7 +784,7 @@ logcat_save() {
   fname=$(mktemp -u --suffix=.txt 2>/dev/null) || \
     fname="logcat_$(date +%Y%m%d_%H%M%S)_$$.txt"
 
-  # Validate generated filename (whitelist check)
+  # Validate generated filename
   if ! [[ "$fname" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
     echo -e "${RED}Generated filename contains invalid characters: $fname${NC}"
     return 1
@@ -760,10 +798,9 @@ logcat_save() {
 
   check_device_connection || return 1
 
-  echo -e "${GREEN}Saving logcat to $fname. Press Ctrl+C to stop or wait 5 minutes.${NC}"
+  echo -e "${GREEN}Saving logcat to $fname.${NC}"
   echo -e "${GREEN}Confirm on device if prompted...${NC}"
 
-  # Use 'adb logcat -d' to dump and exit (more reliable than timeout)
   if adb logcat -d > "$fname" 2>/dev/null; then
     if [[ -s "$fname" ]]; then
       echo -e "${GREEN}Logcat saved to $fname${NC}"
@@ -777,6 +814,7 @@ logcat_save() {
     rm -f "$fname"
     return 1
   fi
+  read -r -p "Press Enter to return..."
 }
 
 shell_access() { 
@@ -827,6 +865,7 @@ screenshot() {
     rm -f "$fname"
     return 1
   fi
+  read -r -p "Press Enter to return..."
 }
 
 # pull and push function
@@ -837,9 +876,9 @@ pull_file() {
   read -r -p "Local destination (default: .): " dst
   dst="${dst:-.}"
 
-  # Validate remote path
-  if [[ -z "$src" ]]; then
-    echo -e "${RED}Remote path required.${NC}"
+  # Validate remote path (basic sanitization)
+  if [[ -z "$src" || ! "$src" =~ ^/[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid remote path.${NC}"
     return 1
   fi
 
@@ -853,6 +892,7 @@ pull_file() {
     return 1
   fi
   echo -e "${GREEN}Successfully pulled: $resolved_src${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 push_file() {
@@ -865,8 +905,8 @@ push_file() {
     return 1
   fi
 
-  if [[ -z "$dst" ]]; then
-    echo -e "${RED}Remote destination required${NC}"
+  if [[ -z "$dst" || ! "$dst" =~ ^/[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid remote destination.${NC}"
     return 1
   fi
 
@@ -881,6 +921,7 @@ push_file() {
     return 1
   fi
   echo -e "${GREEN}Successfully pushed: $src${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 # Delete file from device (requires ADB connection)
@@ -890,14 +931,8 @@ delete_file() {
   read -r -p "Remote file path to delete (e.g. /storage/emulated/0/Download/file.txt): " remote_path
 
   # Validate input
-  if [[ -z "$remote_path" ]]; then
-    echo -e "${RED}No path provided.${NC}"
-    return 1
-  fi
-
-  # Basic sanitization
-  if ! [[ "$remote_path" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}Invalid characters in path: $remote_path${NC}"
+  if [[ -z "$remote_path" || ! "$remote_path" =~ ^/[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid path provided.${NC}"
     return 1
   fi
 
@@ -929,6 +964,7 @@ delete_file() {
     echo -e "${RED}Failed to delete: $resolved_path${NC}"
     return 1
   fi
+  read -r -p "Press Enter to return..."
 }
 
 # Pull entire folder from device
@@ -938,8 +974,8 @@ pull_folder() {
   read -r -p "Local destination (default: .): " dst
   dst="${dst:-.}"
 
-  if [[ -z "$src" ]]; then
-    echo -e "${RED}Remote path required.${NC}"
+  if [[ -z "$src" || ! "$src" =~ ^/[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid remote path.${NC}"
     return 1
   fi
 
@@ -953,6 +989,7 @@ pull_folder() {
     return 1
   fi
   echo -e "${GREEN}Successfully pulled folder: $resolved_src${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 # Push entire folder to device
@@ -966,8 +1003,8 @@ push_folder() {
     return 1
   fi
 
-  if [[ -z "$dst" ]]; then
-    echo -e "${RED}Remote destination required${NC}"
+  if [[ -z "$dst" || ! "$dst" =~ ^/[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid remote destination.${NC}"
     return 1
   fi
 
@@ -981,6 +1018,7 @@ push_folder() {
     return 1
   fi
   echo -e "${GREEN}Successfully pushed folder: $src${NC}"
+  read -r -p "Press Enter to return..."
 }
 
 # Delete folder from device (with recursive option)
@@ -990,14 +1028,8 @@ delete_folder() {
   read -r -p "Remote folder path to delete (e.g. /storage/emulated/0/Download/MyFolder): " remote_path
 
   # Validate input
-  if [[ -z "$remote_path" ]]; then
-    echo -e "${RED}No path provided.${NC}"
-    return 1
-  fi
-
-  # Sanitize
-  if ! [[ "$remote_path" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}Invalid characters in path: $remote_path${NC}"
+  if [[ -z "$remote_path" || ! "$remote_path" =~ ^/[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Invalid path provided.${NC}"
     return 1
   fi
 
@@ -1029,6 +1061,7 @@ delete_folder() {
     echo -e "${RED}Failed to delete folder: $resolved_path${NC}"
     return 1
   fi
+  read -r -p "Press Enter to return..."
 }
 
 # Search for folders on device
@@ -1040,6 +1073,9 @@ find_folder() {
     return 1
   fi
 
+  # Sanitize fname for find command (escape special chars)
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\\\''/g")
+
   echo -e "${GREEN}Searching for folders matching: $fname${NC}"
   echo -e "${GREEN}In: /storage/emulated/0, /sdcard, /Download, /DCIM, /Documents${NC}"
 
@@ -1048,7 +1084,7 @@ find_folder() {
   local results
   results=$(adb shell "for path in $search_paths; do
                       if [ -d \"\$path\" ]; then
-                        find \"\$path\" -name '$fname' -type d 2>/dev/null
+                        find \"\$path\" -name '$fname_escaped' -type d 2>/dev/null
                       fi
                     done" | tr -d '\r')
 
@@ -1060,7 +1096,7 @@ find_folder() {
     echo -e "${YELLOW}No folders found matching '$fname' in common storage directories.${NC}"
   fi
 
-  read -r -p "Press Enter to continue..."
+  read -r -p "Press Enter to return..."
 }
 
 search_device_files() {
@@ -1071,13 +1107,16 @@ search_device_files() {
     return 1
   fi
 
+  # Sanitize fname
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\\\''/g")
+
   echo -e "${GREEN}Searching for files matching: $fname${NC}"
   local search_paths="/storage/emulated/0 /sdcard /Download /DCIM /Documents"
 
   local results
   results=$(adb shell "for path in $search_paths; do
                       if [ -d \"\$path\" ]; then
-                        find \"\$path\" -name '$fname' -type f 2>/dev/null
+                        find \"\$path\" -name '$fname_escaped' -type f 2>/dev/null
                       fi
                     done" | tr -d '\r')
 
@@ -1089,7 +1128,7 @@ search_device_files() {
     echo -e "${YELLOW}No files found matching '$fname'.${NC}"
   fi
 
-  read -r -p "Press Enter to continue..."
+  read -r -p "Press Enter to return..."
 }
 
 # Requires root access
@@ -1104,6 +1143,7 @@ change_device_language() {
   adb shell setprop persist.sys.language "$lang" || { echo -e "${RED}Failed to set language${NC}"; return 1; }
   echo -e "${GREEN}Language changed to $lang, rebooting device...${NC}"
   adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; }
+  read -r -p "Press Enter to return..."
 }
 
 #Toggle Dark Mode (Android 10+)
@@ -1112,7 +1152,7 @@ toggle_dark_mode() {
   echo -e "${GREEN}Toggle System Dark Mode (Android 10+)${NC}"
   echo "1) Dark Mode"
   echo "2) Light Mode"
-  echo "3) Battery Saver (Auto)"
+  echo "3) Auto (based on system)"
   read -r -p "Choose: " mode
   case $mode in
     1) adb shell settings put secure ui_night_mode 2 ;;
@@ -1120,14 +1160,15 @@ toggle_dark_mode() {
     3) adb shell settings put secure ui_night_mode 0 ;;
     *) echo -e "${RED}Invalid choice${NC}"; sleep 1; return 1 ;;
   esac
-  adb shell cmd uimode apply
+  adb shell cmd uimode night apply || { echo -e "${RED}Failed to apply theme${NC}"; return 1; }
   echo -e "${GREEN}Theme updated.${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 # === Custom Settings for Android TV/Google TV ===
 custom_settings_menu() {
   while true; do
+    clear
     echo -e "\n${GREEN}Custom Settings for Android TV/Google TV:${NC}"
     echo "1) Apply general-purpose performance improvements"
     echo "2) Enable processing speed management system"
@@ -1161,7 +1202,7 @@ apply_general_performance_improvements() {
   adb shell settings put secure tap_duration_threshold 0.0 || { echo -e "${RED}Failed to set tap_duration_threshold${NC}"; return 1; }
   adb shell settings put secure touch_blocking_period 0.0 || { echo -e "${RED}Failed to set touch_blocking_period${NC}"; return 1; }
   echo -e "${GREEN}Performance improvements applied.${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 enable_processing_speed_management() {
@@ -1169,7 +1210,7 @@ enable_processing_speed_management() {
   echo -e "${GREEN}Enabling processing speed management system...${NC}"
   adb shell settings put global sem_enhanced_cpu_responsiveness 1 || { echo -e "${RED}Failed to enable CPU responsiveness${NC}"; return 1; }
   echo -e "${GREEN}Processing speed management enabled.${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 # Requires root access
@@ -1182,7 +1223,7 @@ delete_cache_memory() {
     return 1
   fi
   echo -e "${GREEN}Cache memory deleted.${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 optimize_app_performance() {
@@ -1190,7 +1231,7 @@ optimize_app_performance() {
   echo -e "${GREEN}Optimizing application performance...${NC}"
   adb shell cmd package compile -m speed-profile -a || { echo -e "${RED}Failed to optimize apps${NC}"; return 1; }
   echo -e "${GREEN}Application performance optimized.${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 close_background_apps() {
@@ -1201,7 +1242,7 @@ close_background_apps() {
     adb shell am force-stop "$pkg" || { echo -e "${RED}Failed to stop $pkg${NC}"; continue; }
   done < <(adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r') || { echo -e "${RED}Failed to list packages${NC}"; return 1; }
   echo -e "${GREEN}Background apps closed.${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 delete_app_data_cache() {
@@ -1213,7 +1254,7 @@ delete_app_data_cache() {
   }
 
   read -r -p "Enter package name to delete data and cache: " pkg
-  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._]+$ ]]; then
+  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     echo -e "${RED}Invalid package name: $pkg${NC}"
     return 1
   fi
@@ -1229,7 +1270,7 @@ delete_app_data_cache() {
   }
 
   echo -e "${GREEN}Data and cache deleted for $pkg (user 0).${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 remove_ads() {
@@ -1242,22 +1283,21 @@ remove_ads() {
   case $choice in
     1)
       adb shell settings put global private_dns_mode off || { echo -e "${RED}Failed to disable private DNS${NC}"; return 1; }
-      adb shell settings delete global default_dns_server || { echo -e "${RED}Failed to delete default DNS${NC}"; return 1; }
-      adb shell settings put global private_dns 0 || { echo -e "${RED}Failed to set private DNS${NC}"; return 1; }
+      adb shell settings delete global private_dns_specifier || { echo -e "${RED}Failed to delete DNS specifier${NC}"; return 1; }
       echo -e "${GREEN}Private DNS disabled.${NC}"
       ;;
     2)
       adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
       adb shell settings put global private_dns_specifier dns.adguard.com || { echo -e "${RED}Failed to set AdGuard DNS${NC}"; return 1; }
       if adb shell pm list packages | grep -q "com.google.android.apps.tv.launcherx"; then
-        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx. Root access may be required.${NC}"; }
+        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx data.${NC}"; }
       else
-        echo -e "${RED}Package com.google.android.apps.tv.launcherx not found${NC}"
+        echo -e "${YELLOW}Package com.google.android.apps.tv.launcherx not found${NC}"
       fi
       if adb shell pm list packages | grep -q "com.android.providers.tv"; then
-        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv. Root access may be required.${NC}"; }
+        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv data.${NC}"; }
       else
-        echo -e "${RED}Package com.android.providers.tv not found${NC}"
+        echo -e "${YELLOW}Package com.android.providers.tv not found${NC}"
       fi
       echo -e "${GREEN}AdGuard private DNS enabled.${NC}"
       ;;
@@ -1265,14 +1305,14 @@ remove_ads() {
       adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
       adb shell settings put global private_dns_specifier p2.freedns.controld.com || { echo -e "${RED}Failed to set ControlD DNS${NC}"; return 1; }
       if adb shell pm list packages | grep -q "com.google.android.apps.tv.launcherx"; then
-        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx. Root access may be required.${NC}"; }
+        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx data.${NC}"; }
       else
-        echo -e "${RED}Package com.google.android.apps.tv.launcherx not found${NC}"
+        echo -e "${YELLOW}Package com.google.android.apps.tv.launcherx not found${NC}"
       fi
       if adb shell pm list packages | grep -q "com.android.providers.tv"; then
-        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv. Root access may be required.${NC}"; }
+        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv data.${NC}"; }
       else
-        echo -e "${RED}Package com.android.providers.tv not found${NC}"
+        echo -e "${YELLOW}Package com.android.providers.tv not found${NC}"
       fi
       echo -e "${GREEN}ControlD private DNS enabled.${NC}"
       ;;
@@ -1280,7 +1320,7 @@ remove_ads() {
       echo -e "${RED}Invalid choice.${NC}"
       ;;
   esac
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 # === Menus ===
@@ -1336,7 +1376,7 @@ category_device_info() {
       5) show_cpu_mem_usage ;;
       6) show_uptime ;;
       7) device_test_status ;;
-      8) grow_check_root ;;
+      8) show_check_root ;;
       9) show_device_model ;;
       10) show_foreground_app ;;
       11) show_network_info ;;
@@ -1360,7 +1400,7 @@ category_app_mgmt() {
     echo "8) Push APK as system app (needs root)"
     echo "9) Disable bloatware (keep, but hide)"
     echo "10) Back to main menu"
-    read -r -p "Choose (1-9): " c
+    read -r -p "Choose (1-10): " c
     case $c in
       1) install_single_apk ;;
       2) install_apk_folder ;;
@@ -1468,7 +1508,7 @@ check_for_updates() {
   echo -e "${GREEN}Checking for updates...${NC}"
   adb shell am start -a android.settings.SYSTEM_UPDATE_SETTINGS || { echo -e "${RED}Failed to open update settings${NC}"; return 1; }
   echo -e "${GREEN}Update settings opened on device. Check manually.${NC}"
-  sleep 2
+  read -r -p "Press Enter to return..."
 }
 
 # === Script start ===
