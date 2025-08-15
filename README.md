@@ -60,9 +60,10 @@
 - Delete cache memory (requires root)
 - Optimize application performance
 - Close apps in the background
-- Delete data and cache from apps
+- One click cache clean
+- Delete data and cache from apps (per app)
 - Check for TV device updates
-- Remove ads via private DNS (AdGuard, ControlD - may require root)
+- Remove ads via private DNS (AdGuard, ControlD - could require root)
 
 #### 🧰 Utilities
 
