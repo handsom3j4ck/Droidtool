@@ -30,7 +30,7 @@
 - Pull/push files and folders
 - Delete files/folders from device
 - Search for files or folders on device
-- Supports `/storage/emulated/0` (recommended over `/sdcard`)
+- Supports `/storage/emulated/0/
 
 #### 🔁 Reboot & Recovery
 
