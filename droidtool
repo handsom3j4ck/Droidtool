@@ -1175,7 +1175,7 @@ custom_settings_menu() {
     echo "3) Delete cache memory (needs root)"
     echo "4) Optimize application performance"
     echo "5) Close apps in the background"
-    echo "6) Delete data and cache from apps"
+    echo "6) One klick Cache clean"
     echo "7) Check for TV device updates"
     echo "8) Remove ads (could require root)"
     echo "9) Back to main menu"
@@ -1186,7 +1186,7 @@ custom_settings_menu() {
       3) delete_cache_memory ;;
       4) optimize_app_performance ;;
       5) close_background_apps ;;
-      6) delete_app_data_cache ;;
+      6) clear_cache_all ;;
       7) check_for_updates ;;
       8) remove_ads ;;
       9) break ;;
