@@ -11,26 +11,35 @@
 #### 🔌 Device Connection & Info
 
 - Connect via **USB**, **IP**, or **ADB Wireless Pair (Android 11+)**
-- Auto-install `android-tools` on Debian/Ubuntu and Arch
+- Auto-install `android-tools` on Debian/Ubuntu, Arch, and Fedora
 - Show full device report: brand, model, Android version, serial, battery, storage, network, hardware
-- Check root access and uptime
-- Show foreground app and network details
+- Show battery health
+- Show storage usage
+- Show CPU & memory usage (requires root)
+- Show device uptime
+- Check device status (battery, network, power - requires root)
+- Check root access
+- Auto-detect device model
+- Show foreground app
+- Show network info
+- Disconnect device
 
 #### 📦 App Management
 
 - Install single or multiple APKs
 - Uninstall or batch-uninstall apps
 - Enable/disable apps (including bloatware)
+- Clear device cache (requires root)
 - Extract APKs from device
 - Push APKs as system apps (requires root)
-- Clear cache for all apps (root)
+- Disable bloatware (keep, but hide)
 
 #### 📁 File Management
 
 - Pull/push files and folders
 - Delete files/folders from device
 - Search for files or folders on device
-- Supports `/storage/emulated/0/
+- Supports `/storage/emulated/0/` and common directories like `/sdcard`, `/Download`, `/DCIM`, `/Documents`
 
 #### 🔁 Reboot & Recovery
 
@@ -42,16 +51,19 @@
 - View and save `logcat` output
 - Open ADB shell
 - Take screenshots
+- Change system language (requires root)
 - Toggle dark mode (Android 10+)
-- Change system language (root)
 
 #### 📺 Custom Settings (Android TV/Google TV)
 
-- Apply performance improvements
-- Optimize app performance
-- Close background apps
-- Clear app data/cache
-- Remove ads via private DNS (AdGuard, ControlD)
+- Apply general-purpose performance improvements
+- Enable processing speed management system
+- Delete cache memory (requires root)
+- Optimize application performance
+- Close apps in the background
+- Delete data and cache from apps
+- Check for TV device updates
+- Remove ads via private DNS (AdGuard, ControlD - may require root)
 
 #### 🧰 Utilities
 
@@ -63,7 +75,7 @@
 
 ### Hardware
 
-- Linux system (tested on Debian, Ubuntu, Arch)
+- Linux system (tested on Debian, Ubuntu, Arch, Fedora)
 - Android device with USB debugging enabled (for ADB)
 - USB cable or network access (for IP/Wi-Fi ADB)
 
