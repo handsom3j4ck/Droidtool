@@ -415,6 +415,12 @@ install_single_apk() {
 
   check_device_connection || return 1
 
+  # Check device Android version for install compatibility
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
+  if [[ "$sdk" -ge 35 ]]; then
+    echo -e "${YELLOW}Note: On Android 15+, apps targeting SDK <24 may not install.${NC}"
+  fi
+
   timeout 300 adb install "$apk" || {
     echo -e "${RED}Failed to install $apk${NC}"
     return 1
@@ -447,6 +453,12 @@ install_apk_folder() {
   fi
 
   check_device_connection || return 1
+
+  # Check device Android version for install compatibility
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
+  if [[ "$sdk" -ge 35 ]]; then
+    echo -e "${YELLOW}Note: On Android 15+, apps targeting SDK <24 may not install.${NC}"
+  fi
 
   for f in "${files[@]}"; do
     if echo "$f" | grep -q '[[:space:]*?|;&'"'"'\"`$;]'; then
