@@ -708,66 +708,6 @@ disable_bloatware() {
   read -r -p "Press Enter to return..."
 }
 
-# === Reboot & Recovery ===
-reboot_menu() {
-  echo -e "${GREEN}Reboot Options:${NC}"
-  echo "1) Reboot to system"
-  echo "2) Reboot to recovery"
-  echo "3) Reboot to bootloader"
-  echo "4) Reboot to fastboot mode"
-  read -r -p "Choice: " r
-  check_device_connection || return 1
-  case $r in
-    1) adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; } ;;
-    2) adb reboot recovery || { echo -e "${RED}Failed to reboot to recovery${NC}"; return 1; } ;;
-    3) adb reboot bootloader || { echo -e "${RED}Failed to reboot to bootloader${NC}"; return 1; } ;;
-    4) adb reboot fastboot || { echo -e "${RED}Failed to reboot to fastboot mode${NC}"; return 1; } ;;
-    *) echo -e "${RED}Invalid choice${NC}" ;;
-  esac
-  read -r -p "Press Enter to return..."
-}
-
-sideload_zip() {
-  read -r -p "ZIP file path: " zip
-
-  # Sanitize
-  if ! [[ "$zip" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}File path contains invalid characters: $zip${NC}"
-    return 1
-  fi
-
-  # Check if file exists and has .zip extension
-  if [[ ! -f "$zip" ]]; then
-    echo -e "${RED}File not found: $zip${NC}"
-    return 1
-  fi
-
-  if ! [[ "$zip" =~ \.zip$ ]]; then
-    echo -e "${RED}Invalid file type. Only .zip files are allowed: $zip${NC}"
-    return 1
-  fi
-
-  # Check ADB state
-  state=$(adb get-state 2>/dev/null)
-  if [[ "$state" != "sideload" ]]; then
-    if [[ "$state" == "recovery" ]]; then
-      echo -e "${RED}Device is in recovery but not sideload mode. Please enable ADB sideload in recovery.${NC}"
-    else
-      echo -e "${RED}Device is not in recovery or sideload mode. Please boot into recovery first.${NC}"
-    fi
-    return 1
-  fi
-
-  echo -e "${GREEN}Starting sideload...${NC}"
-  timeout 600 adb sideload "$zip" || {
-    echo -e "${RED}Failed to sideload $zip or timed out${NC}"
-    return 1
-  }
-
-  echo -e "${GREEN}Sideload completed successfully.${NC}"
-  read -r -p "Press Enter to return..."
-}
-
 # === Developer Tools ===
 logcat_viewer() {
   read -r -p "Filter (optional): " filter
@@ -1450,21 +1390,19 @@ main_menu() {
     echo "1) Device Connection & Info"
     echo "2) App Management"
     echo "3) File Management"
-    echo "4) Reboot & Sideload"
-    echo "5) Developer Tools"
-    echo "6) Custom Settings"
-    echo "7) Utilities"
-    echo "8) Exit"
-    read -r -p "Select category (1-8): " cat
+    echo "4) Developer Tools"
+    echo "5) Custom Settings"
+    echo "6) Utilities"
+    echo "7) Exit"
+    read -r -p "Select category (1-7): " cat
     case $cat in
       1) category_device_info ;;
       2) category_app_mgmt ;;
       3) category_files ;;
-      4) category_reboot ;;
-      5) category_dev_tools ;;
-      6) custom_settings_menu ;;
-      7) category_utilities ;;
-      8) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
+      4) category_dev_tools ;;
+      5) custom_settings_menu ;;
+      6) category_utilities ;;
+      7) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1558,23 +1496,6 @@ category_files() {
       7) search_device_files ;;
       8) find_folder ;;
       9) break ;;
-      *) echo -e "${RED}Invalid choice.${NC}" ;;
-    esac
-  done
-}
-
-category_reboot() {
-  clear
-  while true; do
-    echo -e "${GREEN}\n Reboot & Sideload:${NC}"
-    echo "1) Reboot options"
-    echo "2) Sideload ZIP"
-    echo "3) Back to main menu"
-    read -r -p "Choose (1-3): " c
-    case $c in
-      1) reboot_menu ;;
-      2) sideload_zip ;;
-      3) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
