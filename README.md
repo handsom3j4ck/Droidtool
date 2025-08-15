@@ -55,10 +55,7 @@
 
 #### 🧰 Utilities
 
-- Safe path validation
-- Input sanitization
-- Error handling and retry logic
-- Graceful cleanup on exit
+- Check for device updates
 
 ---
 
