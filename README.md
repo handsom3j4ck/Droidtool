@@ -30,7 +30,7 @@
 - Clear device cache (requires root)
 - Extract APKs from device
 - Push APKs as system apps (requires root)
-- Disable bloatware (keep, but hide)
+- Disable bloatware
 
 #### 📁 File Management
 
@@ -74,15 +74,13 @@
 
 ### Hardware
 
-- Linux system (tested on Debian, Ubuntu, Arch, Fedora)
-- Android device with USB debugging enabled (for ADB)
-- USB cable or network access (for IP/Wi-Fi ADB)
+- Linux system (tested on Arch)
+- Android device with USB debugging enabled
+- USB cable or network access
 
 ### Software
 
-- `android-tools-adb` (required)
-- `android-tools-fastboot` (optional, for reboot menu)
-- Root access (for root-restricted features)
+- android-tools (required)
 
 ### Permissions
 
