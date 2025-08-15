@@ -25,13 +25,6 @@
 - Push APKs as system apps (requires root)
 - Clear cache for all apps (root)
 
-#### 💾 Backup & Restore
-
-- ADB backup: full or per-app (`.ab` format)
-- Root backup: tar `/data`, `/system`, `/cache` or app data (`.tar.gz`)
-- Restore from `.ab`, `.ab.gz`, or `.tar.gz` (root)
-- List available backups
-
 #### 📁 File Management
 
 - Pull/push files and folders
