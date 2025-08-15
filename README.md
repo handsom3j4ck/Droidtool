@@ -11,7 +11,6 @@
 #### 🔌 Device Connection & Info
 
 - Connect via **USB**, **IP**, or **ADB Wireless Pair (Android 11+)**
-- Auto-install `android-tools` on Debian/Ubuntu, Arch, and Fedora
 - Show full device report: brand, model, Android version, serial, battery, storage, network, hardware
 - Show battery health
 - Show storage usage
@@ -126,7 +125,7 @@ chmod +x droidtool
 1. Launch `./droidtool`
 2. Select connection method (USB, IP, or Wireless Pair)
 3. Navigate the menu to perform tasks
-4. Exit cleanly (option 9) to stop ADB server
+4. Exit cleanly (option 8) to stop ADB server
 
 ---
 
