@@ -26,7 +26,7 @@
 
 - Install single or multiple APKs
 - Uninstall or batch-uninstall apps
-- Enable/disable apps (including bloatware)
+- Enable/disable apps
 - Clear device cache (requires root)
 - Extract APKs from device
 - Push APKs as system apps (requires root)
