@@ -156,12 +156,6 @@ connection_menu() {
 }
 
 # === Device Info & System ===
-disconnect_device() { 
-  check_device_connection || return 1
-  adb disconnect || { echo -e "${RED}Failed to disconnect device${NC}"; return 1; }; 
-  echo -e "${GREEN}Device disconnected.${NC}"
-}
-
 show_device_report() {
   check_device_connection || return 1
   clear
@@ -1480,32 +1474,30 @@ category_device_info() {
   clear
   while true; do
     echo -e "\n${GREEN}Device Connection & Info:${NC}"
-    echo "1) Disconnect device"
-    echo "2) Show device info"
-    echo "3) Show battery health"
-    echo "4) Show storage usage"
-    echo "5) Show CPU & memory usage (needs root)"
-    echo "6) Show device uptime"
-    echo "7) Check device status (needs root)"
-    echo "8) Check root access (needs root)"
-    echo "9) Show device model"
-    echo "10) Show foreground app"
-    echo "11) Show network info"
-    echo "12) Back to main menu"
-    read -r -p "Choose (1-12): " c
+    echo "1) Show device info"
+    echo "2) Show battery health"
+    echo "3) Show storage usage"
+    echo "4) Show CPU & memory usage (needs root)"
+    echo "5) Show device uptime"
+    echo "6) Check device status (needs root)"
+    echo "7) Check root access (needs root)"
+    echo "8) Show device model"
+    echo "9) Show foreground app"
+    echo "10) Show network info"
+    echo "11) Back to main menu"
+    read -r -p "Choose (1-11): " c
     case $c in
-      1) disconnect_device ;;
-      2) show_device_report ;;
-      3) show_battery_health ;;
-      4) show_storage_usage ;;
-      5) show_cpu_mem_usage ;;
-      6) show_uptime ;;
-      7) device_test_status ;;
-      8) show_check_root ;;
-      9) show_device_model ;;
-      10) show_foreground_app ;;
-      11) show_network_info ;;
-      12) break ;;
+      1) show_device_report ;;
+      2) show_battery_health ;;
+      3) show_storage_usage ;;
+      4) show_cpu_mem_usage ;;
+      5) show_uptime ;;
+      6) device_test_status ;;
+      7) show_check_root ;;
+      8) show_device_model ;;
+      9) show_foreground_app ;;
+      10) show_network_info ;;
+      11) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
