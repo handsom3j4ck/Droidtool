@@ -21,7 +21,6 @@
 - Auto-detect device model
 - Show foreground app
 - Show network info
-- Disconnect device
 
 #### 📦 App Management
 
