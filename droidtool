@@ -551,12 +551,12 @@ enable_disable_app() {
 clear_cache_all() {
   check_device_connection || return 1
   check_root_access || return 1
-  echo -e "${GREEN}Clearing cache for all apps...${NC}"
-  if ! adb shell "su -c 'pm trim-caches 1024M'" &>/dev/null; then
-    echo -e "${RED}Failed to clear cache. Root access may be unavailable.${NC}"
+  echo -e "${GREEN}Clearing normal app cache for all apps (without clearing app data)...${NC}"
+  if ! adb shell "su -c 'for pkg in \$(pm list packages | cut -d\":\" -f2); do rm -rf /data/data/\$pkg/cache/* 2>/dev/null; done'" &>/dev/null; then
+    echo -e "${RED}Failed to clear app caches. Root access may be unavailable or some caches could not be cleared.${NC}"
     return 1
   fi
-  echo -e "${GREEN}Cache cleared successfully.${NC}"
+  echo -e "${GREEN}App caches cleared successfully.${NC}"
   read -r -p "Press Enter to return..."
 }
 
