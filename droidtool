@@ -1121,7 +1121,7 @@ custom_settings_menu() {
     echo "4) Close apps in the background"
     echo "5) Check for TV device updates"
     echo "6) Remove ads via private DNS"
-    echo "7) Delete app data and cache (per app)"
+    echo "7) Delete Cache AIO"
     echo "8) Back to main menu"
     read -r -p "Choose (1-8): " c
     case $c in
@@ -1131,7 +1131,7 @@ custom_settings_menu() {
       4) close_background_apps ;;
       5) check_for_updates ;;
       6) remove_ads ;;
-      7) delete_app_data_cache ;;
+      7) delete_cache_aio ;;
       8) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
@@ -1190,8 +1190,8 @@ enable_processing_speed_management() {
   fi
   if is_rooted; then
     echo -e "${GREEN}Device is rooted. Setting CPU governor to performance...${NC}"
-    if adb shell "su -c 'for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > \$i; done'" &>/dev/null; then
-      echo -e "${GREEN}CPU governor set to performance on all cores.${NC}"
+    if adb shell "su -c 'echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'" &>/dev/null; then
+      echo -e "${GREEN}CPU governor set to performance.${NC}"
       success=true
     else
       echo -e "${YELLOW}Failed to set CPU governor.${NC}"
@@ -1241,7 +1241,6 @@ optimize_app_performance() {
 close_background_apps() {
   check_device_connection || return 1
   echo -e "${GREEN}Closing apps in the background...${NC}"
-  echo -e "${YELLOW}Note: This force-stops third-party apps, but services may restart. Use cautiously as it may affect notifications or background tasks.${NC}"
   read -r -p "This will force-stop all third-party apps. Confirm? (y/N): " confirm
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo -e "${GREEN}Operation canceled.${NC}"
@@ -1260,43 +1259,14 @@ close_background_apps() {
   read -r -p "Press Enter to return..."
 }
 
-delete_app_data_cache() {
+delete_cache_aio() {
   check_device_connection || return 1
-  echo -e "${GREEN}Installed packages (current user):${NC}"
-  adb shell pm list packages -3 | sed 's/package://g' | tr -d '\r' || {
-    echo -e "${RED}Failed to list packages${NC}"
-    return 1
-  }
-
-  read -r -p "Enter package name to delete data and cache: " pkg
-  if [[ ! "$pkg" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo -e "${RED}Invalid package name: $pkg${NC}"
-    return 1
-  fi
-  if ! adb shell pm list packages | grep -q "package:$pkg"; then
-    echo -e "${RED}Package not found: $pkg${NC}"
-    return 1
-  fi
-
-  # Confirm deletion (added for safety)
-  read -r -p "This will delete ALL data and cache for $pkg (user 0). Confirm? (y/N): " confirm
-  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-    echo -e "${GREEN}Operation canceled.${NC}"
-    return 0
-  fi
-
-  # Clear data in user 0 context
-  if adb shell pm clear --user 0 "$pkg" &>/dev/null; then
-    echo -e "${GREEN}Data and cache deleted for $pkg (user 0).${NC}"
+  echo -e "${GREEN}Trimming system and app caches (without root)...${NC}"
+  if adb shell pm trim-caches 999G; then
+    echo -e "${GREEN}Caches trimmed successfully.${NC}"
   else
-    echo -e "${RED}Failed to clear data for $pkg (permission/user issue or command not supported)${NC}"
-    # Fallback to clear cache only if full clear fails
-    if adb shell "rm -rf /data/data/$pkg/cache/*" &>/dev/null; then
-      echo -e "${YELLOW}Fallback: Only cache cleared for $pkg.${NC}"
-    else
-      echo -e "${RED}Failed to clear cache as fallback.${NC}"
-      return 1
-    fi
+    echo -e "${RED}Failed to trim caches.${NC}"
+    return 1
   fi
   read -r -p "Press Enter to return..."
 }
