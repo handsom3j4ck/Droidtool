@@ -8,16 +8,13 @@
 
 ### ✅ Features
 
-#### 🔌 Device Connection & Info
+#### 🔌 Connection Options
 
 - Connect via **USB**, **IP**, or **ADB Wireless Pair (Android 11+)**
+
+#### 🔌 Device Info
+
 - Show full device report: brand, model, Android version, serial, battery, storage, network, hardware
-- Show battery health
-- Show storage usage
-- Show device uptime
-- Auto-detect device model
-- Show foreground app
-- Show network info
 
 #### 📦 App Management
 
