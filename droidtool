@@ -1253,17 +1253,15 @@ main_menu() {
     echo "3) File Management"
     echo "4) Developer Tools"
     echo "5) Custom Settings"
-    echo "6) Utilities"
-    echo "7) Exit"
-    read -r -p "Select category (1-7): " cat
+    echo "6) Exit"
+    read -r -p "Select category (1-6): " cat
     case $cat in
       1) category_device_info ;;
       2) category_app_mgmt ;;
       3) category_files ;;
       4) category_dev_tools ;;
       5) custom_settings_menu ;;
-      6) category_utilities ;;
-      7) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
+      6) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1370,21 +1368,6 @@ category_dev_tools() {
       4) screenshot ;;
       5) toggle_dark_mode ;;
       6) break ;;
-      *) echo -e "${RED}Invalid choice.${NC}" ;;
-    esac
-  done
-}
-
-category_utilities() {
-  clear
-  while true; do
-    echo -e "${GREEN}\n Utilities:${NC}"
-    echo "1) Check for device updates"
-    echo "2) Back to main menu"
-    read -r -p "Choose (1-2): " c
-    case $c in
-      1) check_for_updates ;;
-      2) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
