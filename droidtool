@@ -1245,8 +1245,8 @@ remove_ads() {
 
 # === Menus ===
 main_menu() {
-  (tput clear 2>/dev/null) || printf '\033[2J\033[H'
   while true; do
+    (tput clear 2>/dev/null) || printf '\033[2J\033[H'
     echo -e "\n${GREEN}=== Droidtool Main Menu ===${NC}"
     echo "1) Device Connection & Info"
     echo "2) App Management"
@@ -1268,8 +1268,8 @@ main_menu() {
 }
 
 category_device_info() {
-  clear
   while true; do
+    clear
     echo -e "\n${GREEN}Device Connection & Info:${NC}"
     echo "1) Show device info"
     echo "2) Show battery health"
@@ -1295,8 +1295,8 @@ category_device_info() {
 }
 
 category_app_mgmt() {
-  clear
   while true; do
+    clear
     echo -e "${GREEN}\n App Management:${NC}"
     echo "1) Install single APK"
     echo "2) Install multiple APKs"
@@ -1322,8 +1322,8 @@ category_app_mgmt() {
 }
 
 category_files() {
-  clear
   while true; do
+    clear
     echo -e "${GREEN}\n File Management:${NC}"
     echo "1) Pull file from device"
     echo "2) Push file to device"
@@ -1351,8 +1351,8 @@ category_files() {
 }
 
 category_dev_tools() {
-  clear
   while true; do
+    clear
     echo -e "${GREEN}\n Developer Tools:${NC}"
     echo "1) Show logcat"
     echo "2) Save logcat to file"
