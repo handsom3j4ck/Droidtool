@@ -287,13 +287,20 @@ show_device_report() {
 
   # === Hardware ===
   echo -e "${GREEN}Hardware Info${NC}"
-  local cpu=$(adb shell getprop ro.hardware 2>/dev/null | tr -d '\r' | xargs)
+  local cpu_info=$(adb shell cat /proc/cpuinfo 2>/dev/null)
+  local cpu=$(echo "$cpu_info" | grep 'Hardware' | head -n1 | cut -d: -f2 | xargs)
   if [[ -z "$cpu" ]]; then
-    cpu=$(adb shell cat /proc/cpuinfo 2>/dev/null | grep 'Hardware' | head -n1 | cut -d: -f2 | xargs)
+    cpu=$(adb shell getprop ro.hardware 2>/dev/null | tr -d '\r' | xargs)
   fi
-  [[ -z "$cpu" ]] && cpu="Unknown"
+  local cores=$(echo "$cpu_info" | grep -c '^processor')
+  [[ $cores -eq 0 ]] && cores="Unknown"
+  cpu="${cpu:-Unknown} (${cores} cores)"
 
-  local gpu=$(adb shell getprop ro.opengles.version 2>/dev/null | tr -d '\r' | xargs)
+  local gpu_info=$(adb shell dumpsys SurfaceFlinger 2>/dev/null | grep GLES | head -n1)
+  local gpu=$(echo "$gpu_info" | cut -d ',' -f2 | xargs)
+  if [[ -z "$gpu" ]]; then
+    gpu=$(adb shell getprop ro.opengles.version 2>/dev/null | tr -d '\r' | xargs)
+  fi
   [[ -z "$gpu" ]] && gpu="Unknown"
 
   echo "  CPU:       $cpu"
@@ -1084,17 +1091,32 @@ custom_settings_menu() {
 apply_general_performance_improvements() {
   check_device_connection || return 1
   echo -e "${GREEN}Applying general-purpose performance improvements...${NC}"
-  adb shell settings put global cached_apps_freezer enabled || { echo -e "${RED}Failed to set cached_apps_freezer${NC}"; return 1; }
-  adb shell settings put secure tap_duration_threshold 0.0 || { echo -e "${RED}Failed to set tap_duration_threshold${NC}"; return 1; }
-  adb shell settings put secure touch_blocking_period 0.0 || { echo -e "${RED}Failed to set touch_blocking_period${NC}"; return 1; }
-  echo -e "${GREEN}Performance improvements applied.${NC}"
+  adb shell settings put global cached_apps_freezer enabled || echo -e "${YELLOW}Failed to set cached_apps_freezer (may not be supported)${NC}"
+  adb shell settings put secure tap_duration_threshold 0.0 || echo -e "${YELLOW}Failed to set tap_duration_threshold (may not be supported)${NC}"
+  adb shell settings put secure touch_blocking_period 0.0 || echo -e "${YELLOW}Failed to set touch_blocking_period (may not be supported)${NC}"
+  adb shell settings put global window_animation_scale 0.0 || echo -e "${YELLOW}Failed to disable window animations${NC}"
+  adb shell settings put global transition_animation_scale 0.0 || echo -e "${YELLOW}Failed to disable transition animations${NC}"
+  adb shell settings put global animator_duration_scale 0.0 || echo -e "${YELLOW}Failed to disable animator duration${NC}"
+  adb shell settings put global always_finish_activities 1 || echo -e "${YELLOW}Failed to set always finish activities${NC}"
+  echo -e "${GREEN}Performance improvements applied (some may not be supported on your device).${NC}"
   read -r -p "Press Enter to return..."
 }
 
 enable_processing_speed_management() {
   check_device_connection || return 1
+  local brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs | tr '[:upper:]' '[:lower:]')
   echo -e "${GREEN}Enabling processing speed management system...${NC}"
-  adb shell settings put global sem_enhanced_cpu_responsiveness 1 || { echo -e "${RED}Failed to enable CPU responsiveness${NC}"; return 1; }
+  if [[ "$brand" == "samsung" ]]; then
+    adb shell settings put global sem_enhanced_cpu_responsiveness 1 || { echo -e "${RED}Failed to enable CPU responsiveness${NC}"; return 1; }
+    echo -e "${GREEN}Samsung-specific CPU responsiveness enabled.${NC}"
+  else
+    echo -e "${YELLOW}Device brand is $brand (not Samsung). Applying general tweaks.${NC}"
+    adb shell settings put global debug.performance.tuning 1 || echo -e "${YELLOW}Failed to set performance tuning (may not be supported)${NC}"
+  fi
+  if is_rooted; then
+    echo -e "${GREEN}Device is rooted. Setting CPU governor to performance...${NC}"
+    adb shell "su -c 'echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'" || echo -e "${YELLOW}Failed to set CPU governor.${NC}"
+  fi
   echo -e "${GREEN}Processing speed management enabled.${NC}"
   read -r -p "Press Enter to return..."
 }
@@ -1102,7 +1124,10 @@ enable_processing_speed_management() {
 optimize_app_performance() {
   check_device_connection || return 1
   echo -e "${GREEN}Optimizing application performance...${NC}"
-  adb shell cmd package compile -m speed-profile -a || { echo -e "${RED}Failed to optimize apps${NC}"; return 1; }
+  echo -e "${YELLOW}This may take a while for devices with many apps.${NC}"
+  adb shell cmd package bg-dexopt-job || echo -e "${YELLOW}Failed to run background dexopt (may not be supported)${NC}"
+  adb shell cmd package compile -m speed-profile -a || { echo -e "${RED}Failed to optimize apps with speed-profile${NC}"; }
+  adb shell cmd package compile -m speed -a || echo -e "${YELLOW}Failed to optimize with speed mode (fallback).${NC}"
   echo -e "${GREEN}Application performance optimized.${NC}"
   read -r -p "Press Enter to return..."
 }
@@ -1157,9 +1182,11 @@ remove_ads() {
   check_device_connection || return 1
   echo -e "${GREEN}Remove ads by configuring private DNS:${NC}"
   echo "1) Disable private DNS (default)"
-  echo "2) Enable AdGuard private DNS"
-  echo "3) Enable ControlD private DNS"
-  read -r -p "Choose (1-3): " choice
+  echo "2) Enable AdGuard private DNS (dns.adguard.com)"
+  echo "3) Enable ControlD private DNS (p2.freedns.controld.com)"
+  echo "4) Enable Quad9 private DNS (dns.quad9.net)"
+  echo "5) Enable NextDNS private DNS (dns.nextdns.io - basic adblock)"
+  read -r -p "Choose (1-5): " choice
   case $choice in
     1)
       adb shell settings put global private_dns_mode off || { echo -e "${RED}Failed to disable private DNS${NC}"; return 1; }
@@ -1169,38 +1196,45 @@ remove_ads() {
     2)
       adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
       adb shell settings put global private_dns_specifier dns.adguard.com || { echo -e "${RED}Failed to set AdGuard DNS${NC}"; return 1; }
-      if adb shell pm list packages | grep -q "com.google.android.apps.tv.launcherx"; then
-        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx data.${NC}"; }
-      else
-        echo -e "${YELLOW}Package com.google.android.apps.tv.launcherx not found${NC}"
-      fi
-      if adb shell pm list packages | grep -q "com.android.providers.tv"; then
-        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv data.${NC}"; }
-      else
-        echo -e "${YELLOW}Package com.android.providers.tv not found${NC}"
-      fi
+      clear_launcher_data
       echo -e "${GREEN}AdGuard private DNS enabled.${NC}"
       ;;
     3)
       adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
       adb shell settings put global private_dns_specifier p2.freedns.controld.com || { echo -e "${RED}Failed to set ControlD DNS${NC}"; return 1; }
-      if adb shell pm list packages | grep -q "com.google.android.apps.tv.launcherx"; then
-        adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx data.${NC}"; }
-      else
-        echo -e "${YELLOW}Package com.google.android.apps.tv.launcherx not found${NC}"
-      fi
-      if adb shell pm list packages | grep -q "com.android.providers.tv"; then
-        adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv data.${NC}"; }
-      else
-        echo -e "${YELLOW}Package com.android.providers.tv not found${NC}"
-      fi
+      clear_launcher_data
       echo -e "${GREEN}ControlD private DNS enabled.${NC}"
+      ;;
+    4)
+      adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
+      adb shell settings put global private_dns_specifier dns.quad9.net || { echo -e "${RED}Failed to set Quad9 DNS${NC}"; return 1; }
+      clear_launcher_data
+      echo -e "${GREEN}Quad9 private DNS enabled.${NC}"
+      ;;
+    5)
+      adb shell settings put global private_dns_mode hostname || { echo -e "${RED}Failed to set private DNS mode${NC}"; return 1; }
+      adb shell settings put global private_dns_specifier dns.nextdns.io || { echo -e "${RED}Failed to set NextDNS${NC}"; return 1; }
+      clear_launcher_data
+      echo -e "${GREEN}NextDNS private DNS enabled (basic config). For custom, set up on nextdns.io.${NC}"
       ;;
     *)
       echo -e "${RED}Invalid choice.${NC}"
       ;;
   esac
   read -r -p "Press Enter to return..."
+}
+
+clear_launcher_data() {
+  if adb shell pm list packages | grep -q "com.google.android.apps.tv.launcherx"; then
+    adb shell pm clear com.google.android.apps.tv.launcherx || { echo -e "${RED}Failed to clear launcherx data.${NC}"; }
+  else
+    echo -e "${YELLOW}Package com.google.android.apps.tv.launcherx not found${NC}"
+  fi
+  if adb shell pm list packages | grep -q "com.android.providers.tv"; then
+    adb shell pm clear com.android.providers.tv || { echo -e "${RED}Failed to clear providers.tv data.${NC}"; }
+  else
+    echo -e "${YELLOW}Package com.android.providers.tv not found${NC}"
+  fi
 }
 
 # === Menus ===
