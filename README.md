@@ -37,7 +37,7 @@
 - Enable processing speed management system
 - Optimize application performance
 - Close apps in the background
-- One click cache clean
+- AIO cache clean
 - Delete data and cache from apps (per app)
 - Check for TV device updates
 - Remove ads via private DNS (AdGuard, ControlD, Quad9, NextDNS)
