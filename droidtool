@@ -167,7 +167,7 @@ show_device_report() {
   local build=$(adb shell getprop ro.build.display.id 2>/dev/null | tr -d '\r' | xargs)
   local security_patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r' | xargs)
   local kernel=$(adb shell uname -r 2>/dev/null | tr -d '\r' | xargs)
-  local mac=$(adb shell ip link show wlan0 2>/dev/null | grep -o -E '([[:xdigit:]]{1,2}:){5}[[:xdigit:]]{1,2}' | head -n1 | tr -d '\r')
+  local mac=$(adb shell "ip link show wlan0 2>/dev/null || ip link show eth0 2>/dev/null" | grep -o -E '([[:xdigit:]]{1,2}:){5}[[:xdigit:]]{1,2}' | head -n1 | tr -d '\r')
   local rooted="No"
   if is_rooted; then rooted="Yes"; fi
 
@@ -923,7 +923,7 @@ find_folder() {
   fi
 
   # Sanitize fname for find command (escape special chars for single-quoted context)
-  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\\\''/g")
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\''/g")
 
   local use_root=false
   local search_paths="/storage/emulated/0 /sdcard /Download /DCIM /Documents"
@@ -978,7 +978,7 @@ search_device_files() {
   fi
 
   # Sanitize fname for find command (escape special chars for single-quoted context)
-  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\\\''/g")
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\''/g")
 
   local use_root=false
   local search_paths="/storage/emulated/0 /sdcard /Download /DCIM /Documents"
