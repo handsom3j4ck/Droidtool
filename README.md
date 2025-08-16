@@ -47,7 +47,7 @@
 - One click cache clean
 - Delete data and cache from apps (per app)
 - Check for TV device updates
-- Remove ads via private DNS (AdGuard, ControlD)
+- Remove ads via private DNS (AdGuard, ControlD, Quad9, NextDNS)
 
 ---
 
