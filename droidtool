@@ -21,25 +21,6 @@ check_device_connection() {
   fi
 }
 
-# Check root access
-check_root_access() {
-  check_device_connection || return 1
-  if ! adb shell "command -v su" &>/dev/null; then
-    echo -e "${RED}No 'su' binary found on device.${NC}"
-    return 1
-  fi
-  if ! adb root &>/dev/null; then
-    echo -e "${RED}Failed to run adb root. Device may not support root access.${NC}"
-    return 1
-  fi
-  # Use adb shell to run id and check output safely
-  if ! adb shell 'id | grep -q "uid=0"' &>/dev/null; then
-    echo -e "${RED}Root access required for this operation.${NC}"
-    return 1
-  fi
-  return 0
-}
-
 # Ensure android-tools is installed
 install_android_tools() {
   echo -e "${GREEN}Checking for android-tools...${NC}"
@@ -294,19 +275,6 @@ show_storage_usage() {
   read -r -p "Press Enter to return..."
 }
 
-# Requires root access
-show_cpu_mem_usage() { 
-  check_device_connection || return 1
-  check_root_access || return 1
-  output=$(adb shell top -n 1 2>/dev/null | head -n 12) || { echo -e "${RED}Failed to retrieve CPU and memory usage. Device may not support this command.${NC}"; return 1; }
-  if [[ -z "$output" ]]; then
-    echo -e "${RED}No CPU or memory information retrieved. Device may not support this command.${NC}"
-    return 1
-  fi
-  echo "$output"
-  read -r -p "Press Enter to return..."
-}
-
 show_uptime() { 
   check_device_connection || return 1
   output=$(adb shell uptime 2>/dev/null) || { echo -e "${RED}Failed to retrieve uptime. Device may not support this command.${NC}"; return 1; }
@@ -315,34 +283,6 @@ show_uptime() {
     return 1
   fi
   echo "$output"
-  read -r -p "Press Enter to return..."
-}
-
-# Requires root access
-device_test_status() {
-  check_device_connection || return 1
-  check_root_access || return 1
-  battery_output=$(adb shell dumpsys battery 2>/dev/null) || { echo -e "${RED}Failed to retrieve battery status. Device may not support this command.${NC}"; return 1; }
-  netstats_output=$(adb shell dumpsys netstats 2>/dev/null) || { echo -e "${RED}Failed to retrieve network stats. Device may not support this command.${NC}"; return 1; }
-  power_output=$(adb shell dumpsys power 2>/dev/null) || { echo -e "${RED}Failed to retrieve power status. Device may not support this command.${NC}"; return 1; }
-  if [[ -z "$battery_output" && -z "$netstats_output" && -z "$power_output" ]]; then
-    echo -e "${RED}No device status information retrieved. Device may not support these commands.${NC}"
-    return 1
-  fi
-  echo -e "${GREEN}Battery Status:${NC}"
-  echo "$battery_output"
-  echo -e "${GREEN}Network Stats:${NC}"
-  echo "$netstats_output"
-  echo -e "${GREEN}Power Status:${NC}"
-  echo "$power_output"
-  read -r -p "Press Enter to return..."
-}
-
-# Requires root access
-show_check_root() {
-  check_device_connection || return 1
-  check_root_access || return 1
-  echo -e "${GREEN}Root access is available.${NC}"
   read -r -p "Press Enter to return..."
 }
 
@@ -564,19 +504,6 @@ enable_disable_app() {
   read -r -p "Press Enter to return..."
 }
 
-# Requires root access
-clear_cache_all() {
-  check_device_connection || return 1
-  check_root_access || return 1
-  echo -e "${GREEN}Clearing normal app cache for all apps (without clearing app data)...${NC}"
-  if ! adb shell "su -c 'for pkg in \$(pm list packages | cut -d\":\" -f2); do rm -rf /data/data/\$pkg/cache/* 2>/dev/null; done'" &>/dev/null; then
-    echo -e "${RED}Failed to clear app caches. Root access may be unavailable or some caches could not be cleared.${NC}"
-    return 1
-  fi
-  echo -e "${GREEN}App caches cleared successfully.${NC}"
-  read -r -p "Press Enter to return..."
-}
-
 extract_apk() {
   read -r -p "Package name: " pkg
 
@@ -614,54 +541,6 @@ extract_apk() {
     return 1
   }
   echo -e "${GREEN}APK extracted successfully.${NC}"
-  read -r -p "Press Enter to return..."
-}
-
-# Requires root access
-push_as_system_app() {
-  read -r -p "Path to APK: " apk
-
-  if ! [[ "$apk" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}File path contains invalid characters: $apk${NC}"
-    return 1
-  fi
-
-  read -r -p "Target folder (/system/app or /system/priv-app): " target
-  if [[ "$target" != "/system/app" && "$target" != "/system/priv-app" ]]; then
-    echo -e "${RED}Invalid target folder. Use /system/app or /system/priv-app.${NC}"
-    return 1
-  fi
-
-  if [[ ! -f "$apk" ]]; then
-    echo -e "${RED}File not found: $apk${NC}"
-    return 1
-  fi
-
-  check_device_connection || return 1
-  check_root_access || return 1
-
-  # Ensure adbd is running as root
-  adb root || { echo -e "${RED}Failed to gain root on ADB daemon${NC}"; return 1; }
-  sleep 1
-
-  adb remount | grep -q "remount succeeded" || {
-    echo -e "${RED}Failed to remount system partition${NC}"
-    return 1
-  }
-
-  timeout 300 adb push "$apk" "$target/" || {
-    echo -e "${RED}Failed to push $apk to $target${NC}"
-    return 1
-  }
-
-  echo -e "${GREEN}APK pushed to $target. Reboot required to apply changes.${NC}"
-  read -r -p "Reboot now? (y/n): " confirm
-  if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-    adb reboot || {
-      echo -e "${RED}Failed to reboot${NC}"
-      return 1
-    }
-  fi
   read -r -p "Press Enter to return..."
 }
 
@@ -1195,21 +1074,6 @@ search_device_files() {
   read -r -p "Press Enter to return..."
 }
 
-# Requires root access
-change_device_language() {
-  read -r -p "Locale code (e.g. en-US, de-DE): " locale
-  if [[ ! "$locale" =~ ^[a-z]{2}-[A-Z]{2}$ ]]; then
-    echo -e "${RED}Invalid locale code: $locale (use 2-letter lang-2-letter country, e.g., en-US, de-DE)${NC}"
-    return 1
-  fi
-  check_device_connection || return 1
-  check_root_access || return 1
-  adb shell setprop persist.sys.locale "$locale" || { echo -e "${RED}Failed to set locale${NC}"; return 1; }
-  echo -e "${GREEN}Locale changed to $locale, rebooting device...${NC}"
-  adb reboot || { echo -e "${RED}Failed to reboot${NC}"; return 1; }
-  read -r -p "Press Enter to return..."
-}
-
 # Toggle Dark Mode (Android 10+)
 toggle_dark_mode() {
   check_device_connection || return 1
@@ -1236,26 +1100,22 @@ custom_settings_menu() {
     echo -e "\n${GREEN}Custom Settings for Android TV/Google TV:${NC}"
     echo "1) Apply general-purpose performance improvements"
     echo "2) Enable processing speed management system"
-    echo "3) Delete cache memory (needs root)"
-    echo "4) Optimize application performance"
-    echo "5) Close apps in the background"
-    echo "6) One click Cache clean"
-    echo "7) Check for TV device updates"
-    echo "8) Remove ads (could require root)"
-    echo "9) Delete app data and cache (per app)"
-    echo "10) Back to main menu"
-    read -r -p "Choose (1-10): " c
+    echo "3) Optimize application performance"
+    echo "4) Close apps in the background"
+    echo "5) Check for TV device updates"
+    echo "6) Remove ads via private DNS"
+    echo "7) Delete app data and cache (per app)"
+    echo "8) Back to main menu"
+    read -r -p "Choose (1-8): " c
     case $c in
       1) apply_general_performance_improvements ;;
       2) enable_processing_speed_management ;;
-      3) delete_cache_memory ;;
-      4) optimize_app_performance ;;
-      5) close_background_apps ;;
-      6) clear_cache_all ;;
-      7) check_for_updates ;;
-      8) remove_ads ;;
-      9) delete_app_data_cache ;;
-      10) break ;;
+      3) optimize_app_performance ;;
+      4) close_background_apps ;;
+      5) check_for_updates ;;
+      6) remove_ads ;;
+      7) delete_app_data_cache ;;
+      8) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1276,19 +1136,6 @@ enable_processing_speed_management() {
   echo -e "${GREEN}Enabling processing speed management system...${NC}"
   adb shell settings put global sem_enhanced_cpu_responsiveness 1 || { echo -e "${RED}Failed to enable CPU responsiveness${NC}"; return 1; }
   echo -e "${GREEN}Processing speed management enabled.${NC}"
-  read -r -p "Press Enter to return..."
-}
-
-# Requires root access
-delete_cache_memory() {
-  check_device_connection || return 1
-  check_root_access || return 1
-  echo -e "${GREEN}Deleting cache memory for all apps...${NC}"
-  if ! adb shell "su -c 'pm trim-caches 1024M'" &>/dev/null; then
-    echo -e "${RED}Failed to clear cache. Root access may be unavailable or command not supported.${NC}"
-    return 1
-  fi
-  echo -e "${GREEN}Cache memory deleted.${NC}"
   read -r -p "Press Enter to return..."
 }
 
@@ -1429,27 +1276,21 @@ category_device_info() {
     echo "1) Show device info"
     echo "2) Show battery health"
     echo "3) Show storage usage"
-    echo "4) Show CPU & memory usage (needs root)"
-    echo "5) Show device uptime"
-    echo "6) Check device status (needs root)"
-    echo "7) Check root access (needs root)"
-    echo "8) Show device model"
-    echo "9) Show foreground app"
-    echo "10) Show network info"
-    echo "11) Back to main menu"
-    read -r -p "Choose (1-11): " c
+    echo "4) Show device uptime"
+    echo "5) Show device model"
+    echo "6) Show foreground app"
+    echo "7) Show network info"
+    echo "8) Back to main menu"
+    read -r -p "Choose (1-8): " c
     case $c in
       1) show_device_report ;;
       2) show_battery_health ;;
       3) show_storage_usage ;;
-      4) show_cpu_mem_usage ;;
-      5) show_uptime ;;
-      6) device_test_status ;;
-      7) show_check_root ;;
-      8) show_device_model ;;
-      9) show_foreground_app ;;
-      10) show_network_info ;;
-      11) break ;;
+      4) show_uptime ;;
+      5) show_device_model ;;
+      6) show_foreground_app ;;
+      7) show_network_info ;;
+      8) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1464,23 +1305,19 @@ category_app_mgmt() {
     echo "3) Uninstall app"
     echo "4) Batch uninstall apps"
     echo "5) Enable/disable app"
-    echo "6) Clear device cache (needs root)"
-    echo "7) Extract APK from device"
-    echo "8) Push APK as system app (needs root)"
-    echo "9) Disable bloatware (keep, but hide)"
-    echo "10) Back to main menu"
-    read -r -p "Choose (1-10): " c
+    echo "6) Extract APK from device"
+    echo "7) Disable bloatware (keep, but hide)"
+    echo "8) Back to main menu"
+    read -r -p "Choose (1-8): " c
     case $c in
       1) install_single_apk ;;
       2) install_apk_folder ;;
       3) uninstall_app ;;
       4) batch_uninstall ;;
       5) enable_disable_app ;;
-      6) clear_cache_all ;;
-      7) extract_apk ;;
-      8) push_as_system_app ;;
-      9) disable_bloatware ;;
-      10) break ;;
+      6) extract_apk ;;
+      7) disable_bloatware ;;
+      8) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1523,18 +1360,16 @@ category_dev_tools() {
     echo "2) Save logcat to file"
     echo "3) Open shell"
     echo "4) Take screenshot"
-    echo "5) Change language & reboot (needs root)"
-    echo "6) Toggle dark mode (Android 10+)"
-    echo "7) Back to main menu"
-    read -r -p "Choose (1-7): " c
+    echo "5) Toggle dark mode (Android 10+)"
+    echo "6) Back to main menu"
+    read -r -p "Choose (1-6): " c
     case $c in
       1) logcat_viewer ;;
       2) logcat_save ;;
       3) shell_access ;;
       4) screenshot ;;
-      5) change_device_language ;;
-      6) toggle_dark_mode ;;
-      7) break ;;
+      5) toggle_dark_mode ;;
+      6) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
