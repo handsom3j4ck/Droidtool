@@ -11,6 +11,7 @@ NC='\033[0m'
 
 # Clean up ADB server on script termination
 trap 'adb kill-server &>/dev/null; echo -e "${RED}Script terminated. ADB server stopped.${NC}"; exit 1' SIGINT SIGTERM
+trap 'adb kill-server &>/dev/null' EXIT
 
 # Check device connection
 check_device_connection() {
@@ -688,7 +689,7 @@ screenshot() {
 
   # Capture and save
   if adb exec-out screencap -p > "$fname" 2>/dev/null; then
-    # Check if file is valid (non-zero size)
+    # Check if if file is valid (non-zero size)
     if [[ -s "$fname" ]]; then
       echo -e "${GREEN}Screenshot saved as $fname${NC}"
     else
