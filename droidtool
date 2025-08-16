@@ -13,6 +13,9 @@ NC='\033[0m'
 trap 'adb kill-server &>/dev/null; echo -e "${RED}Script terminated. ADB server stopped.${NC}"; exit 1' SIGINT SIGTERM
 trap 'adb kill-server &>/dev/null' EXIT
 
+# Get script directory
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
+
 # Check device connection
 check_device_connection() {
   adb start-server &>/dev/null || { echo -e "${RED}ADB server failed to start.${NC}"; return 1; }
@@ -158,6 +161,12 @@ show_device_report() {
   echo "  Serial:    ${serial:-Unknown}"
   echo
 
+  # === Uptime ===
+  echo -e "${GREEN}Uptime${NC}"
+  local uptime=$(adb shell uptime 2>/dev/null | tr -d '\r' | xargs)
+  echo "  $uptime"
+  echo
+
   # === Battery ===
   echo -e "${GREEN}Battery Status${NC}"
   local battery=$(adb shell dumpsys battery 2>/dev/null)
@@ -204,7 +213,7 @@ show_device_report() {
 
   # === Storage ===
   echo -e "${GREEN}Storage Usage${NC}"
-  local storage=$(adb shell df -h 2>/dev/null)
+  local storage=$(adb shell df -h /data /system /cache 2>/dev/null)
   if [[ -n "$storage" ]]; then
     echo "$storage" | while IFS= read -r line; do
       echo "  $line"
@@ -243,22 +252,11 @@ show_device_report() {
   fi
   [[ -z "$cpu" ]] && cpu="Unknown"
 
-  local gpu_line=$(adb shell dumpsys SurfaceFlinger 2>/dev/null | grep GLES | head -n1)
-  local gpu="Unknown"
-  if [[ -n "$gpu_line" ]]; then
-    gpu=$(echo "$gpu_line" | awk -F', ' '{print $2}' | tr -d '\r' | xargs)
-  fi
-
-  local ram_raw=$(adb shell cat /proc/meminfo 2>/dev/null | grep MemTotal | awk '{print $2}')
-  local ram="Unknown"
-  if [[ -n "$ram_raw" && "$ram_raw" =~ ^[0-9]+$ ]]; then
-    ram_mb=$((ram_raw / 1024))
-    ram="${ram_mb} MB"
-  fi
+  local gpu=$(adb shell getprop ro.opengles.version 2>/dev/null | tr -d '\r' | xargs)
+  [[ -z "$gpu" ]] && gpu="Unknown"
 
   echo "  CPU:       $cpu"
   echo "  GPU:       $gpu"
-  echo "  RAM:       $ram"
   echo
 
   # === Done ===
@@ -276,51 +274,6 @@ show_battery_health() {
   read -r -p "Press Enter to return..."
 }
 
-show_storage_usage() { 
-  check_device_connection || return 1
-  output=$(adb shell df -h 2>/dev/null) || { echo -e "${RED}Failed to retrieve storage usage. Device may not support this command.${NC}"; return 1; }
-  if [[ -z "$output" ]]; then
-    echo -e "${RED}No storage information retrieved. Device may not support this command.${NC}"
-    return 1
-  fi
-  echo "$output"
-  read -r -p "Press Enter to return..."
-}
-
-show_uptime() { 
-  check_device_connection || return 1
-  output=$(adb shell uptime 2>/dev/null) || { echo -e "${RED}Failed to retrieve uptime. Device may not support this command.${NC}"; return 1; }
-  if [[ -z "$output" ]]; then
-    echo -e "${RED}No uptime information retrieved. Device may not support this command.${NC}"
-    return 1
-  fi
-  echo "$output"
-  read -r -p "Press Enter to return..."
-}
-
-# Auto-Detect Connected Device Model
-show_device_model() {
-  check_device_connection || return 1
-  model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' | xargs)
-  brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
-  echo -e "${GREEN}Device: $brand $model${NC}"
-  read -r -p "Press Enter to return..."
-}
-
-# List Running Apps (Foreground App)
-show_foreground_app() {
-  check_device_connection || return 1
-  echo -e "${GREEN}Foreground App (currently on screen):${NC}"
-  fg_app=$(adb shell dumpsys window windows 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | grep -o 'u0 [^}]*' | cut -d' ' -f2 | cut -d'/' -f1 | head -n1 | tr -d '\r')
-  if [[ -n "$fg_app" ]]; then
-    echo "$fg_app"
-  else
-    echo "No active app detected"
-  fi
-  read -r -p "Press Enter to return..."
-}
-
-# Show Network Info
 show_network_info() {
   check_device_connection || return 1
   echo -e "${GREEN}Network Information:${NC}"
@@ -341,6 +294,19 @@ show_network_info() {
   echo "IP Address: ${ip:-Unknown}"
   echo "Wi-Fi SSID: $ssid"
   echo "Signal: $signal"
+  read -r -p "Press Enter to return..."
+}
+
+# List Running Apps (Foreground App)
+show_foreground_app() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Foreground App (currently on screen):${NC}"
+  fg_app=$(adb shell dumpsys window windows 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | grep -o 'u0 [^}]*' | cut -d' ' -f2 | cut -d'/' -f1 | head -n1 | tr -d '\r')
+  if [[ -n "$fg_app" ]]; then
+    echo "$fg_app"
+  else
+    echo "No active app detected"
+  fi
   read -r -p "Press Enter to return..."
 }
 
@@ -671,28 +637,14 @@ shell_access() {
 }
 
 screenshot() {
-  # Check write permission
-  if [[ ! -w . ]]; then
-    echo -e "${RED}No write permission in current directory: $(pwd)${NC}"
+  # Check write permission in script directory
+  if [[ ! -w "$SCRIPT_DIR" ]]; then
+    echo -e "${RED}No write permission in script directory: $SCRIPT_DIR${NC}"
     return 1
   fi
 
   # Generate unique filename
-  local fname
-  fname=$(mktemp -u --suffix=.png 2>/dev/null) || \
-    fname="screenshot_$(date +%Y%m%d_%H%M%S)_$$.png"
-
-  # Validate filename
-  if ! [[ "$fname" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
-    echo -e "${RED}Generated filename contains invalid characters: $fname${NC}"
-    return 1
-  fi
-
-  # Ensure we can write
-  if ! touch "$fname" 2>/dev/null; then
-    echo -e "${RED}Cannot create file: $fname${NC}"
-    return 1
-  fi
+  local fname="$SCRIPT_DIR/screenshot_$(date +%Y%m%d_%H%M%S)_$$.png"
 
   check_device_connection || return 1
 
@@ -1285,22 +1237,14 @@ category_device_info() {
     echo -e "\n${GREEN}Device Connection & Info:${NC}"
     echo "1) Show device info"
     echo "2) Show battery health"
-    echo "3) Show storage usage"
-    echo "4) Show device uptime"
-    echo "5) Show device model"
-    echo "6) Show foreground app"
-    echo "7) Show network info"
-    echo "8) Back to main menu"
-    read -r -p "Choose (1-8): " c
+    echo "3) Show network info"
+    echo "4) Back to main menu"
+    read -r -p "Choose (1-4): " c
     case $c in
       1) show_device_report ;;
       2) show_battery_health ;;
-      3) show_storage_usage ;;
-      4) show_uptime ;;
-      5) show_device_model ;;
-      6) show_foreground_app ;;
-      7) show_network_info ;;
-      8) break ;;
+      3) show_network_info ;;
+      4) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
@@ -1317,8 +1261,9 @@ category_app_mgmt() {
     echo "5) Enable/disable app"
     echo "6) Extract APK from device"
     echo "7) Disable bloatware (keep, but hide)"
-    echo "8) Back to main menu"
-    read -r -p "Choose (1-8): " c
+    echo "8) Show foreground app"
+    echo "9) Back to main menu"
+    read -r -p "Choose (1-9): " c
     case $c in
       1) install_single_apk ;;
       2) install_apk_folder ;;
@@ -1327,7 +1272,8 @@ category_app_mgmt() {
       5) enable_disable_app ;;
       6) extract_apk ;;
       7) disable_bloatware ;;
-      8) break ;;
+      8) show_foreground_app ;;
+      9) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
