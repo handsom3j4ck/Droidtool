@@ -14,10 +14,7 @@
 - Show full device report: brand, model, Android version, serial, battery, storage, network, hardware
 - Show battery health
 - Show storage usage
-- Show CPU & memory usage (requires root)
 - Show device uptime
-- Check device status (battery, network, power - requires root)
-- Check root access
 - Auto-detect device model
 - Show foreground app
 - Show network info
@@ -27,9 +24,7 @@
 - Install single or multiple APKs
 - Uninstall or batch-uninstall apps
 - Enable/disable apps
-- Clear device cache (requires root)
 - Extract APKs from device
-- Push APKs as system apps (requires root)
 - Disable bloatware
 
 #### 📁 File Management
@@ -44,20 +39,18 @@
 - View and save `logcat` output
 - Open ADB shell
 - Take screenshots
-- Change system language (requires root)
 - Toggle dark mode (Android 10+)
 
 #### 📺 Custom Settings (Android TV/Google TV)
 
 - Apply general-purpose performance improvements
 - Enable processing speed management system
-- Delete cache memory (requires root)
 - Optimize application performance
 - Close apps in the background
 - One click cache clean
 - Delete data and cache from apps (per app)
 - Check for TV device updates
-- Remove ads via private DNS (AdGuard, ControlD - could require root)
+- Remove ads via private DNS (AdGuard, ControlD)
 
 #### 🧰 Utilities
 
