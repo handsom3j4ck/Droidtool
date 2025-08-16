@@ -201,10 +201,10 @@ show_device_report() {
   if [[ -z "$battery" ]]; then
     echo "  Failed to retrieve battery info"
   else
-    local level=$(echo "$battery" | grep "level" | awk '{print $2}')
-    local status=$(echo "$battery" | grep "status" | awk '{print $2}')
-    local health=$(echo "$battery" | grep "health" | awk '{print $2}')
-    local temp_raw=$(echo "$battery" | grep "temperature" | awk '{print $2}')
+    local level=$(echo "$battery" | grep '^  level: ' | awk '{print $3}')
+    local status=$(echo "$battery" | grep '^  status: ' | awk '{print $3}')
+    local health=$(echo "$battery" | grep '^  health: ' | awk '{print $3}')
+    local temp_raw=$(echo "$battery" | grep '^  temperature: ' | awk '{print $3}')
     local temp="?"
 
     # Only process temp if value is numeric
