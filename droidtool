@@ -204,7 +204,7 @@ show_device_report() {
 
   # === Storage ===
   echo -e "${GREEN}Storage Usage${NC}"
-  local storage=$(adb shell df -h /data /system /cache 2>/dev/null)
+  local storage=$(adb shell df -h 2>/dev/null)
   if [[ -n "$storage" ]]; then
     echo "$storage" | while IFS= read -r line; do
       echo "  $line"
@@ -243,11 +243,22 @@ show_device_report() {
   fi
   [[ -z "$cpu" ]] && cpu="Unknown"
 
-  local gpu=$(adb shell getprop ro.opengles.version 2>/dev/null | tr -d '\r' | xargs)
-  [[ -z "$gpu" ]] && gpu="Unknown"
+  local gpu_line=$(adb shell dumpsys SurfaceFlinger 2>/dev/null | grep GLES | head -n1)
+  local gpu="Unknown"
+  if [[ -n "$gpu_line" ]]; then
+    gpu=$(echo "$gpu_line" | awk -F', ' '{print $2}' | tr -d '\r' | xargs)
+  fi
+
+  local ram_raw=$(adb shell cat /proc/meminfo 2>/dev/null | grep MemTotal | awk '{print $2}')
+  local ram="Unknown"
+  if [[ -n "$ram_raw" && "$ram_raw" =~ ^[0-9]+$ ]]; then
+    ram_mb=$((ram_raw / 1024))
+    ram="${ram_mb} MB"
+  fi
 
   echo "  CPU:       $cpu"
   echo "  GPU:       $gpu"
+  echo "  RAM:       $ram"
   echo
 
   # === Done ===
@@ -689,7 +700,7 @@ screenshot() {
 
   # Capture and save
   if adb exec-out screencap -p > "$fname" 2>/dev/null; then
-    # Check if if file is valid (non-zero size)
+    # Check if file is valid (non-zero size)
     if [[ -s "$fname" ]]; then
       echo -e "${GREEN}Screenshot saved as $fname${NC}"
     else
