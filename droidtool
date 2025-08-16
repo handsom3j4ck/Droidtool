@@ -167,7 +167,6 @@ show_device_report() {
   local build=$(adb shell getprop ro.build.display.id 2>/dev/null | tr -d '\r' | xargs)
   local security_patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r' | xargs)
   local kernel=$(adb shell uname -r 2>/dev/null | tr -d '\r' | xargs)
-  local mac=$(adb shell "ip link show wlan0 2>/dev/null || ip link show eth0 2>/dev/null" | grep -o -E '([[:xdigit:]]{1,2}:){5}[[:xdigit:]]{1,2}' | head -n1 | tr -d '\r')
   local rooted="No"
   if is_rooted; then rooted="Yes"; fi
 
@@ -178,7 +177,6 @@ show_device_report() {
   echo "  Build:     ${build:-Unknown}"
   echo "  Security Patch: ${security_patch:-Unknown}"
   echo "  Kernel:    ${kernel:-Unknown}"
-  echo "  MAC:       ${mac:-Unknown}"
   echo "  Rooted:    $rooted"
   echo
 
@@ -266,6 +264,11 @@ show_device_report() {
   local ssid_line=$(adb shell dumpsys wifi 2>/dev/null | grep "mWifiInfo" | head -n1)
   local ssid="Not connected"
   local signal="N/A"
+  local mac=$(adb shell cat /sys/class/net/wlan0/address 2>/dev/null | tr -d '\r' | xargs)
+  if [[ -z "$mac" ]]; then
+    mac=$(adb shell cat /sys/class/net/eth0/address 2>/dev/null | tr -d '\r' | xargs)
+  fi
+  [[ -z "$mac" ]] && mac="Unknown"
 
   if [[ -n "$ssid_line" ]]; then
     ssid=$(echo "$ssid_line" | grep -o 'SSID:[^,]*' | cut -d: -f2- | sed 's/^ *//' | tr -d '\r')
@@ -279,6 +282,7 @@ show_device_report() {
   echo "  IP:        ${ip:-Unknown}"
   echo "  Wi-Fi:     $ssid"
   echo "  Signal:    ${signal:-N/A}"
+  echo "  MAC:       ${mac:-Unknown}"
   echo
 
   # === Hardware ===
@@ -655,6 +659,18 @@ screenshot() {
     rm -f "$fname"
     return 1
   fi
+  read -r -p "Press Enter to return..."
+}
+
+custom_adb_command() {
+  check_device_connection || return 1
+  read -r -p "Enter ADB command (without 'adb ' prefix, e.g. 'shell ls /sdcard'): " cmd
+  if [[ -z "$cmd" ]]; then
+    echo -e "${RED}No command entered.${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Executing: adb $cmd${NC}"
+  adb $cmd || { echo -e "${RED}Command failed.${NC}"; return 1; }
   read -r -p "Press Enter to return..."
 }
 
@@ -1195,16 +1211,16 @@ main_menu() {
     echo "1) Device Info"
     echo "2) App Management"
     echo "3) File Management"
-    echo "4) Developer Tools"
-    echo "5) Custom Settings"
+    echo "4) Custom Settings"
+    echo "5) Developer Tools"
     echo "6) Exit"
     read -r -p "Select category (1-6): " cat
     case $cat in
       1) show_device_report ;;
       2) category_app_mgmt ;;
       3) category_files ;;
-      4) category_dev_tools ;;
-      5) custom_settings_menu ;;
+      4) custom_settings_menu ;;
+      5) category_dev_tools ;;
       6) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
@@ -1276,15 +1292,17 @@ category_dev_tools() {
     echo "3) Open shell"
     echo "4) Take screenshot"
     echo "5) Toggle dark mode (Android 10+)"
-    echo "6) Back to main menu"
-    read -r -p "Choose (1-6): " c
+    echo "6) Custom ADB command"
+    echo "7) Back to main menu"
+    read -r -p "Choose (1-7): " c
     case $c in
       1) logcat_viewer ;;
       2) logcat_save ;;
       3) shell_access ;;
       4) screenshot ;;
       5) toggle_dark_mode ;;
-      6) break ;;
+      6) custom_adb_command ;;
+      7) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
