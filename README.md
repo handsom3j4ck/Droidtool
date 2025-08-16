@@ -31,14 +31,6 @@
 - Search for files or folders on device
 - Supports `/storage/emulated/0/` and common directories like `/sdcard`, `/Download`, `/DCIM`, `/Documents`
 
-#### 🧪 Developer Tools
-
-- View and save `logcat` output
-- Open ADB shell
-- Take screenshots
-- Toggle dark mode (Android 10+)
-- Costum ADB command
-
 #### 📺 Custom Settings (Android TV/Google TV)
 
 - Apply general-purpose performance improvements
@@ -49,6 +41,14 @@
 - Delete data and cache from apps (per app)
 - Check for TV device updates
 - Remove ads via private DNS (AdGuard, ControlD, Quad9, NextDNS)
+
+#### 🧪 Developer Tools
+
+- View and save `logcat` output
+- Open ADB shell
+- Take screenshots
+- Toggle dark mode (Android 10+)
+- Costum ADB command
 
 ---
 
