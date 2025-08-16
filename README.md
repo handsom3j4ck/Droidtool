@@ -49,10 +49,6 @@
 - Check for TV device updates
 - Remove ads via private DNS (AdGuard, ControlD)
 
-#### 🧰 Utilities
-
-- Check for device updates
-
 ---
 
 ## 📦 Requirements
