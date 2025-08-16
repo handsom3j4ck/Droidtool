@@ -29,7 +29,6 @@
 - Pull/push files and folders
 - Delete files/folders from device
 - Search for files or folders on device
-- Supports `/storage/emulated/0/` and common directories like `/sdcard`, `/Download`, `/DCIM`, `/Documents`
 
 #### 📺 Custom Settings (Android TV/Google TV)
 
@@ -95,17 +94,6 @@ chmod +x droidtool
 ```
 
 > 💡 The script will auto-install `android-tools` if missing (Debian/Ubuntu/Arch/Fedora/RedHat).
-
----
-
-## 🎯 Usage
-
-### Droidtool
-
-1. Launch `./droidtool`
-2. Select connection method (USB, IP, or Wireless Pair)
-3. Navigate the menu to perform tasks
-4. Exit cleanly (option 8) to stop ADB server
 
 ---
 
