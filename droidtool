@@ -263,45 +263,11 @@ show_device_report() {
   read -r -p "Press Enter to return..."
 }
 
-show_battery_health() { 
-  check_device_connection || return 1
-  output=$(adb shell dumpsys battery 2>/dev/null) || { echo -e "${RED}Failed to retrieve battery health. Device may not support this command.${NC}"; return 1; }
-  if [[ -z "$output" ]]; then
-    echo -e "${RED}No battery information retrieved. Device may not support this command.${NC}"
-    return 1
-  fi
-  echo "$output"
-  read -r -p "Press Enter to return..."
-}
-
-show_network_info() {
-  check_device_connection || return 1
-  echo -e "${GREEN}Network Information:${NC}"
-  ip=$(adb shell ip route 2>/dev/null | awk '{print $9}' | head -n1 | tr -d '\r')
-  ssid_line=$(adb shell dumpsys wifi 2>/dev/null | grep "mWifiInfo" | head -n1)
-  local ssid="Not connected"
-  local signal="N/A"
-
-  if [[ -n "$ssid_line" ]]; then
-    ssid=$(echo "$ssid_line" | grep -o 'SSID:[^,]*' | cut -d: -f2- | sed 's/^ *//' | tr -d '\r')
-    if [[ "$ssid" == "null" || -z "$ssid" ]]; then
-      ssid="Not connected"
-    fi
-    signal=$(echo "$ssid_line" | grep -o 'RSSI: [^,]*' | cut -d: -f2 | xargs)
-    signal="${signal} dBm"
-  fi
-
-  echo "IP Address: ${ip:-Unknown}"
-  echo "Wi-Fi SSID: $ssid"
-  echo "Signal: $signal"
-  read -r -p "Press Enter to return..."
-}
-
 # List Running Apps (Foreground App)
 show_foreground_app() {
   check_device_connection || return 1
   echo -e "${GREEN}Foreground App (currently on screen):${NC}"
-  fg_app=$(adb shell dumpsys window windows 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | grep -o 'u0 [^}]*' | cut -d' ' -f2 | cut -d'/' -f1 | head -n1 | tr -d '\r')
+  fg_app=$(adb shell dumpsys activity activities 2>/dev/null | grep -E 'mFocusedActivity' | awk '{print $4}' | cut -d '/' -f1 | tr -d '\r')
   if [[ -n "$fg_app" ]]; then
     echo "$fg_app"
   else
@@ -1212,7 +1178,7 @@ main_menu() {
   while true; do
     (tput clear 2>/dev/null) || printf '\033[2J\033[H'
     echo -e "\n${GREEN}=== Droidtool Main Menu ===${NC}"
-    echo "1) Device Connection & Info"
+    echo "1) Device Info"
     echo "2) App Management"
     echo "3) File Management"
     echo "4) Developer Tools"
@@ -1220,31 +1186,12 @@ main_menu() {
     echo "6) Exit"
     read -r -p "Select category (1-6): " cat
     case $cat in
-      1) category_device_info ;;
+      1) show_device_report ;;
       2) category_app_mgmt ;;
       3) category_files ;;
       4) category_dev_tools ;;
       5) custom_settings_menu ;;
       6) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
-      *) echo -e "${RED}Invalid choice.${NC}" ;;
-    esac
-  done
-}
-
-category_device_info() {
-  while true; do
-    clear
-    echo -e "\n${GREEN}Device Connection & Info:${NC}"
-    echo "1) Show device info"
-    echo "2) Show battery health"
-    echo "3) Show network info"
-    echo "4) Back to main menu"
-    read -r -p "Choose (1-4): " c
-    case $c in
-      1) show_device_report ;;
-      2) show_battery_health ;;
-      3) show_network_info ;;
-      4) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
