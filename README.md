@@ -37,6 +37,7 @@
 - Open ADB shell
 - Take screenshots
 - Toggle dark mode (Android 10+)
+- Costum ADB command
 
 #### 📺 Custom Settings (Android TV/Google TV)
 
