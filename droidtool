@@ -140,6 +140,16 @@ connection_menu() {
   esac
 }
 
+# Helper function to check if device is rooted
+is_rooted() {
+  local test=$(adb shell "su -c 'echo yes' 2>/dev/null" | tr -d '\r')
+  if [[ "$test" == "yes" ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 # === Device Info & System ===
 show_device_report() {
   check_device_connection || return 1
@@ -154,11 +164,20 @@ show_device_report() {
   local release=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' | xargs)
   local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
   local serial=$(adb shell getprop ro.serialno 2>/dev/null | tr -d '\r' | xargs)
+  local build=$(adb shell getprop ro.build.display.id 2>/dev/null | tr -d '\r' | xargs)
+  local security_patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r' | xargs)
+  local kernel=$(adb shell uname -r 2>/dev/null | tr -d '\r' | xargs)
+  local rooted="No"
+  if is_rooted; then rooted="Yes"; fi
 
   echo "  Brand:     ${brand:-Unknown}"
   echo "  Model:     ${model:-Unknown}"
   echo "  Android:   ${release:-Unknown} (SDK ${sdk:-?})"
   echo "  Serial:    ${serial:-Unknown}"
+  echo "  Build:     ${build:-Unknown}"
+  echo "  Security Patch: ${security_patch:-Unknown}"
+  echo "  Kernel:    ${kernel:-Unknown}"
+  echo "  Rooted:    $rooted"
   echo
 
   # === Uptime ===
@@ -223,6 +242,22 @@ show_device_report() {
   fi
   echo
 
+  # === Memory ===
+  echo -e "${GREEN}Memory Info${NC}"
+  local mem=$(adb shell free -h 2>/dev/null | grep Mem)
+  if [[ -n "$mem" ]]; then
+    echo "  $mem"
+  else
+    echo "  Failed to retrieve memory info"
+  fi
+  echo
+
+  # === Screen ===
+  echo -e "${GREEN}Screen Info${NC}"
+  local resolution=$(adb shell wm size 2>/dev/null | grep "Physical size" | cut -d: -f2 | xargs)
+  echo "  Resolution: ${resolution:-Unknown}"
+  echo
+
   # === Network ===
   echo -e "${GREEN}Network Info${NC}"
   local ip=$(adb shell ip route 2>/dev/null | awk '{print $9}' | head -n1 | tr -d '\r')
@@ -263,26 +298,13 @@ show_device_report() {
   read -r -p "Press Enter to return..."
 }
 
-# List Running Apps (Foreground App)
-show_foreground_app() {
-  check_device_connection || return 1
-  echo -e "${GREEN}Foreground App (currently on screen):${NC}"
-  fg_app=$(adb shell dumpsys activity activities 2>/dev/null | grep -E 'mFocusedActivity' | awk '{print $4}' | cut -d '/' -f1 | tr -d '\r')
-  if [[ -n "$fg_app" ]]; then
-    echo "$fg_app"
-  else
-    echo "No active app detected"
-  fi
-  read -r -p "Press Enter to return..."
-}
-
 # === App Management ===
 install_single_apk() {
   read -r -p "Path to APK: " apk
 
   # Sanitize: check for forbidden characters
-  if echo "$apk" | grep -q '[[:space:]*?|;&'"'"'\"`$;]'; then
-    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \", \`, $): $apk${NC}"
+  if echo "$apk" | grep -q '[[:space:]*?|;&'"'"'\"\`$;]'; then
+    echo -e "${RED}File path contains invalid characters (spaces, *, ?, |, ;, &, ', \" , \`, $): $apk${NC}"
     return 1
   fi
 
@@ -313,7 +335,7 @@ install_apk_folder() {
   read -r -p "APK folder: " dir
 
   # Sanitize folder path
-  if echo "$dir" | grep -q '[[:space:]*?|;&'"'"'\"`$;]'; then
+  if echo "$dir" | grep -q '[[:space:]*?|;&'"'"'\"\`$;]'; then
     echo -e "${RED}Folder path contains invalid characters: $dir${NC}"
     return 1
   fi
@@ -343,7 +365,7 @@ install_apk_folder() {
   fi
 
   for f in "${files[@]}"; do
-    if echo "$f" | grep -q '[[:space:]*?|;&'"'"'\"`$;]'; then
+    if echo "$f" | grep -q '[[:space:]*?|;&'"'"'\"\`$;]'; then
       echo -e "${RED}Skipping file with invalid characters in path: $f${NC}"
       continue
     fi
@@ -632,16 +654,6 @@ screenshot() {
     return 1
   fi
   read -r -p "Press Enter to return..."
-}
-
-# Helper function to check if device is rooted
-is_rooted() {
-  local test=$(adb shell "su -c 'echo yes' 2>/dev/null" | tr -d '\r')
-  if [[ "$test" == "yes" ]]; then
-    return 0
-  else
-    return 1
-  fi
 }
 
 # pull and push function
@@ -1208,9 +1220,8 @@ category_app_mgmt() {
     echo "5) Enable/disable app"
     echo "6) Extract APK from device"
     echo "7) Disable bloatware (keep, but hide)"
-    echo "8) Show foreground app"
-    echo "9) Back to main menu"
-    read -r -p "Choose (1-9): " c
+    echo "8) Back to main menu"
+    read -r -p "Choose (1-8): " c
     case $c in
       1) install_single_apk ;;
       2) install_apk_folder ;;
@@ -1219,8 +1230,7 @@ category_app_mgmt() {
       5) enable_disable_app ;;
       6) extract_apk ;;
       7) disable_bloatware ;;
-      8) show_foreground_app ;;
-      9) break ;;
+      8) break ;;
       *) echo -e "${RED}Invalid choice.${NC}" ;;
     esac
   done
