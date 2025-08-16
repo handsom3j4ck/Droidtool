@@ -167,6 +167,7 @@ show_device_report() {
   local build=$(adb shell getprop ro.build.display.id 2>/dev/null | tr -d '\r' | xargs)
   local security_patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r' | xargs)
   local kernel=$(adb shell uname -r 2>/dev/null | tr -d '\r' | xargs)
+  local mac=$(adb shell ip link show wlan0 2>/dev/null | grep -o -E '([[:xdigit:]]{1,2}:){5}[[:xdigit:]]{1,2}' | head -n1 | tr -d '\r')
   local rooted="No"
   if is_rooted; then rooted="Yes"; fi
 
@@ -177,6 +178,7 @@ show_device_report() {
   echo "  Build:     ${build:-Unknown}"
   echo "  Security Patch: ${security_patch:-Unknown}"
   echo "  Kernel:    ${kernel:-Unknown}"
+  echo "  MAC:       ${mac:-Unknown}"
   echo "  Rooted:    $rooted"
   echo
 
