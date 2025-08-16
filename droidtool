@@ -167,6 +167,7 @@ show_device_report() {
   local build=$(adb shell getprop ro.build.display.id 2>/dev/null | tr -d '\r' | xargs)
   local security_patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r' | xargs)
   local kernel=$(adb shell uname -r 2>/dev/null | tr -d '\r' | xargs)
+  local arch=$(adb shell getprop ro.arch 2>/dev/null | tr -d '\r' | xargs)
   local rooted="No"
   if is_rooted; then
     rooted="Yes"
@@ -180,6 +181,7 @@ show_device_report() {
   echo "  Build:     ${build:-Unknown}"
   echo "  Security Patch: ${security_patch:-Unknown}"
   echo "  Kernel:    ${kernel:-Unknown}"
+  echo "  Arch:      ${arch:-Unknown}"
   echo "  Rooted:    $rooted"
   echo
 
@@ -1051,6 +1053,11 @@ search_device_files() {
 # Toggle Dark Mode (Android 10+)
 toggle_dark_mode() {
   check_device_connection || return 1
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
+  if [[ "$sdk" -lt 29 ]]; then
+    echo -e "${RED}Dark mode toggle requires Android 10 (SDK 29) or higher.${NC}"
+    return 1
+  fi
   echo -e "${GREEN}Toggle System Dark Mode (Android 10+)${NC}"
   # Check current mode for better user experience
   local current_mode=$(adb shell settings get secure ui_night_mode 2>/dev/null | tr -d '\r')
@@ -1060,6 +1067,9 @@ toggle_dark_mode() {
     2) echo -e "${YELLOW}Current mode: Dark${NC}" ;;
     *) echo -e "${YELLOW}Current mode: Unknown${NC}" ;;
   esac
+  if [[ "$current_mode" == "0" && "$sdk" -ge 36 ]]; then
+    echo -e "${YELLOW}Note: Auto mode may have issues in Android 16 due to known bugs.${NC}"
+  fi
   echo "1) Dark Mode"
   echo "2) Light Mode"
   echo "3) Auto (based on system)"
@@ -1087,6 +1097,9 @@ toggle_dark_mode() {
       if adb shell settings put secure ui_night_mode 0; then
         adb shell cmd uimode night apply || { echo -e "${YELLOW}Failed to apply theme, but setting changed.${NC}"; }
         echo -e "${GREEN}Auto mode enabled.${NC}"
+        if [[ "$sdk" -ge 36 ]]; then
+          echo -e "${YELLOW}Note: Auto mode may not toggle correctly at sunset/sunrise in Android 16.${NC}"
+        fi
       else
         echo -e "${RED}Failed to enable auto mode.${NC}"
         return 1
@@ -1127,7 +1140,11 @@ custom_settings_menu() {
 
 apply_general_performance_improvements() {
   check_device_connection || return 1
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
   echo -e "${GREEN}Applying general-purpose performance improvements...${NC}"
+  if [[ "$sdk" -lt 28 ]]; then
+    echo -e "${YELLOW}Some tweaks may not be supported on Android versions below 9.${NC}"
+  fi
   local success_count=0
   local total=7
 
@@ -1173,8 +1190,8 @@ enable_processing_speed_management() {
   fi
   if is_rooted; then
     echo -e "${GREEN}Device is rooted. Setting CPU governor to performance...${NC}"
-    if adb shell "su -c 'echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'" &>/dev/null; then
-      echo -e "${GREEN}CPU governor set to performance.${NC}"
+    if adb shell "su -c 'for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > \$i; done'" &>/dev/null; then
+      echo -e "${GREEN}CPU governor set to performance on all cores.${NC}"
       success=true
     else
       echo -e "${YELLOW}Failed to set CPU governor.${NC}"
@@ -1224,6 +1241,7 @@ optimize_app_performance() {
 close_background_apps() {
   check_device_connection || return 1
   echo -e "${GREEN}Closing apps in the background...${NC}"
+  echo -e "${YELLOW}Note: This force-stops third-party apps, but services may restart. Use cautiously as it may affect notifications or background tasks.${NC}"
   read -r -p "This will force-stop all third-party apps. Confirm? (y/N): " confirm
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo -e "${GREEN}Operation canceled.${NC}"
@@ -1272,7 +1290,13 @@ delete_app_data_cache() {
     echo -e "${GREEN}Data and cache deleted for $pkg (user 0).${NC}"
   else
     echo -e "${RED}Failed to clear data for $pkg (permission/user issue or command not supported)${NC}"
-    return 1
+    # Fallback to clear cache only if full clear fails
+    if adb shell "rm -rf /data/data/$pkg/cache/*" &>/dev/null; then
+      echo -e "${YELLOW}Fallback: Only cache cleared for $pkg.${NC}"
+    else
+      echo -e "${RED}Failed to clear cache as fallback.${NC}"
+      return 1
+    fi
   fi
   read -r -p "Press Enter to return..."
 }
