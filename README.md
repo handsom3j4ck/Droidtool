@@ -14,7 +14,7 @@
 
 #### 🔌 Device Info
 
-- Comprehensive device report including brand, model, Android version, SDK, serial, build ID, security patch, kernel, mac, rooted status, uptime, battery (level, status, health, temp), storage usage, memory info, arch, screen resolution, network (currently only works with wifi), hardware (CPU, GPU)
+- Comprehensive device report including brand, model, Android version, SDK, serial, build ID, security patch, kernel, mac, rooted status, uptime, battery (level, status, health, temp), storage usage, memory info, arch, screen resolution, network, hardware (CPU, GPU)
 
 #### 📦 App Management
 
