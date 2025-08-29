@@ -1,6 +1,6 @@
 # Droidtool
 
-**Droidtool** is a powerful, menu-driven Bash script for managing Android devices from a Linux system using ADB. It simplifies device diagnostics, app management, file operations, and system-level tweaks — all from the terminal.
+**Droidtool** is a menu-driven Bash script for managing Android devices from a Linux system using ADB. It simplifies device diagnostics, app management, file operations, and system-level tweaks — all from the terminal.
 
 ---
 
