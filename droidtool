@@ -1,0 +1,2045 @@
+#!/bin/bash
+
+# =============================================================================
+# DROIDTOOL - Android Toolkit for Linux
+# =============================================================================
+
+# Colors for output formatting
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+# Clean up ADB server on script termination
+trap 'adb kill-server &>/dev/null; echo -e "${RED}Script terminated. ADB server stopped.${NC}"; exit 1' SIGINT SIGTERM
+trap 'adb kill-server &>/dev/null' EXIT
+
+# Get script directory
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
+
+# =============================================================================
+# INITIALIZATION AND SETUP FUNCTIONS
+# =============================================================================
+
+# Check device connection (also used elsewhere)
+check_device_connection() {
+  adb start-server &>/dev/null || { echo -e "${RED}ADB server failed to start.${NC}"; return 1; }
+  if ! adb devices | grep -q "device$"; then
+    echo -e "${RED}No device connected. Please reconnect using the connection menu.${NC}"
+    return 1
+  fi
+}
+
+# Ensure android-tools is installed
+install_android_tools() {
+  echo -e "${GREEN}Checking for android-tools...${NC}"
+  if command -v adb &>/dev/null && command -v fastboot &>/dev/null; then
+    echo -e "${GREEN}android-tools is already installed.${NC}"
+    return
+  fi
+  if [ ! -f /etc/os-release ]; then
+    echo -e "${RED}Unable to detect distribution. Please install android-tools manually.${NC}"
+    exit 1
+  fi
+  . /etc/os-release
+  if command -v pacman &>/dev/null; then
+    echo -e "${GREEN}Arch-based distribution detected.${NC}"
+    echo -e "${GREEN}Installing...${NC}"
+    sudo pacman -S --noconfirm android-tools || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
+  elif command -v apt &>/dev/null; then
+    echo -e "${GREEN}Debian-based distribution detected.${NC}"
+    sudo apt update || { echo -e "${RED}Failed to update package lists.${NC}"; exit 1; }
+    UDEV_VERSION=$(apt show android-udev-rules 2>/dev/null | grep '^Version:' | awk '{print $2}')
+    echo -e "${GREEN}Installing...${NC}"
+    if [ "${UDEV_VERSION:-Not available}" != "Not available" ]; then
+      sudo apt install -y adb fastboot android-udev-rules || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
+    else
+      echo -e "${YELLOW}android-udev-rules not available, installing adb and fastboot only.${NC}"
+      sudo apt install -y adb fastboot || { echo -e "${RED}Failed to install android-tools.${NC}"; exit 1; }
+    fi
+  else
+    echo -e "${RED}Unsupported system ($ID). Please install android-tools manually.${NC}"
+    exit 1
+  fi
+  if ! command -v adb &>/dev/null || ! command -v fastboot &>/dev/null; then
+    echo -e "${RED}Failed to install android-tools. Please install manually.${NC}"
+    exit 1
+  fi
+  echo -e "${GREEN}Installed versions:${NC}"
+  adb --version
+  fastboot --version
+}
+
+# Helper function to check if device is rooted
+is_rooted() {
+  local test=$(adb shell "su -c 'echo yes' 2>/dev/null" | tr -d '\r')
+  if [[ "$test" == "yes" ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# =============================================================================
+# ADB CONNECTION FUNCTIONS
+# =============================================================================
+
+# ADB connection functions
+connect_usb() {
+  adb kill-server
+  adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+  echo -e "${GREEN}Looking for USB devices...${NC}"
+  for i in {1..3}; do
+    adb devices
+    if adb devices | grep -q "unauthorized"; then
+      echo -e "${RED}Device unauthorized. Please accept the ADB connection on your device (attempt $i/3).${NC}"
+      sleep 10
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    elif adb devices | grep -q "device$"; then
+      echo -e "${GREEN}Connected via USB.${NC}"
+      return 0
+    else
+      echo -e "${RED}No device found via USB (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    fi
+  done
+  echo -e "${RED}Failed to connect via USB after 3 attempts.${NC}"
+  return 1
+}
+
+connect_ip() {
+  while true; do
+    read -r -p "Enter device IP address: " device_ip
+    if [[ ! "$device_ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] ||
+       [[ ${BASH_REMATCH[1]} -gt 255 || ${BASH_REMATCH[2]} -gt 255 || ${BASH_REMATCH[3]} -gt 255 || ${BASH_REMATCH[4]} -gt 255 ]]; then
+      echo -e "${RED}Invalid IP address: $device_ip${NC}"
+      continue
+    fi
+    break
+  done
+  adb kill-server
+  adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+  echo -e "${GREEN}Connecting to $device_ip...${NC}"
+  for i in {1..3}; do
+    adb connect "$device_ip" || { echo -e "${RED}Failed to connect to $device_ip (attempt $i/3)${NC}"; sleep 5; adb kill-server; adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }; continue; }
+    sleep 3
+    if adb devices | grep -q "$(echo "$device_ip" | sed 's/\./\\./g').*unauthorized"; then
+      echo -e "${RED}Device unauthorized. Please accept the ADB connection on your device (attempt $i/3).${NC}"
+      sleep 10
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    elif adb devices | grep -q "$device_ip.*device"; then
+      echo -e "${GREEN}Connected via IP.${NC}"
+      return 0
+    else
+      echo -e "${RED}Connection to $device_ip failed (attempt $i/3).${NC}"
+      sleep 5
+      adb kill-server
+      adb start-server || { echo -e "${RED}Failed to start ADB server. Check permissions or port conflicts.${NC}"; exit 1; }
+    fi
+  done
+  echo -e "${RED}Failed to connect to $device_ip after 3 attempts.${NC}"
+  return 1
+}
+
+# One-Click ADB Wireless Pairing (Android 11+)
+adb_wireless_pair() {
+  echo -e "${GREEN}Ensure device is on the same Wi-Fi and has 'Pair over Wi-Fi' enabled.${NC}"
+  echo -e "${YELLOW}Settings > Developer options > ADB over network > Pairing${NC}"
+  read -r -p "Enter pairing IP and port (e.g. 192.168.1.100:37521): " ip_port
+  read -r -p "Enter pairing code: " code
+  adb pair "$ip_port" "$code" || { echo -e "${RED}Pairing failed. Check IP:port/code.${NC}"; return 1; }
+  echo -e "${GREEN}Paired successfully! Now connect via IP.${NC}"
+  sleep 2
+}
+
+connection_menu() {
+  echo -e
+  echo -e "${GREEN}Select connection method:${NC}"
+  echo "1) USB"
+  echo "2) IP"
+  echo "3) ADB Wireless Pair (Android 11+)"
+  echo "4) Exit"
+  read -r -p "Choose (1-4): " c
+  case $c in
+    1) connect_usb || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
+    2) connect_ip || { echo -e "${RED}Connection failed. Exiting.${NC}"; exit 1; } ;;
+    3) adb_wireless_pair || { echo -e "${RED}Pairing failed. Exiting.${NC}"; exit 1; } ;;
+    4) echo "Exiting."; exit 0 ;;
+    *) echo -e "${RED}Invalid choice.${NC}" ; connection_menu ;;
+  esac
+}
+
+# =============================================================================
+# DEVICE INFORMATION FUNCTIONS
+# =============================================================================
+
+# === Device Info & System ===
+show_device_report() {
+  check_device_connection || return 1
+  clear
+  echo -e "\n${GREEN}=== Device System Report ===${NC}"
+  echo
+
+  # === Basic Device Info ===
+  echo -e "${GREEN}Device Info${NC}"
+  local brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r' | xargs)
+  local model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r' | xargs)
+  local release=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' | xargs)
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
+  local serial=$(adb shell getprop ro.serialno 2>/dev/null | tr -d '\r' | xargs)
+  local build=$(adb shell getprop ro.build.display.id 2>/dev/null | tr -d '\r' | xargs)
+  local security_patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r' | xargs)
+  local kernel=$(adb shell uname -r 2>/dev/null | tr -d '\r' | xargs)
+  local arch=$(adb shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r' | xargs)
+  local arch_list=$(adb shell getprop ro.product.cpu.abilist 2>/dev/null | tr -d '\r' | xargs)
+  local rooted="No"
+  if is_rooted; then
+    rooted="Yes"
+  fi
+
+  echo "  Brand:     ${brand:-Unknown}"
+  echo "  Model:     ${model:-Unknown}"
+  echo "  Android:   ${release:-Unknown} (SDK ${sdk:-?})"
+  echo "  Serial:    ${serial:-Unknown}"
+  echo "  Build:     ${build:-Unknown}"
+  echo "  Patch:     ${security_patch:-Unknown}"
+  echo "  Kernel:    ${kernel:-Unknown}"
+  echo "  Arch:      ${arch:-Unknown}"
+  echo "  Supported Archs: ${arch_list:-Unknown}"
+  echo "  Root:      $rooted"
+  echo
+
+  # === Uptime ===
+  echo -e "${GREEN}Uptime${NC}"
+  local uptime_seconds=$(adb shell cat /proc/uptime 2>/dev/null | awk '{print int($1)}' | tr -d '\r')
+  if [[ -z "$uptime_seconds" ]]; then
+    echo "  Failed to retrieve uptime"
+  else
+    local hours=$((uptime_seconds / 3600))
+    local minutes=$(( (uptime_seconds % 3600) / 60 ))
+    local up_time=$(printf "%d:%02d" $hours $minutes)
+    echo "  ${up_time}"
+  fi
+  echo
+
+  # === Battery ===
+  echo -e "${GREEN}Battery Status${NC}"
+  local battery=$(adb shell dumpsys battery 2>/dev/null)
+  if [[ -z "$battery" ]]; then
+    echo "  Failed to retrieve battery info"
+  else
+    local level=$(echo "$battery" | grep '^  level: ' | awk '{print $2}')
+    local status=$(echo "$battery" | grep '^  status: ' | awk '{print $2}')
+    local health=$(echo "$battery" | grep '^  health: ' | awk '{print $2}')
+    local temp_raw=$(echo "$battery" | grep '^  temperature: ' | awk '{print $2}')
+    local temp="?"
+
+    # Only process temp if value is numeric
+    if [[ "$temp_raw" =~ ^[0-9]+$ ]]; then
+      temp=$(awk "BEGIN {printf \"%.1f\", $temp_raw / 10}")
+    fi
+
+    case $status in
+      1) status="Unknown" ;;
+      2) status="Charging" ;;
+      3) status="Discharging" ;;
+      4) status="Not Charging" ;;
+      5) status="Full" ;;
+      *) status="Unknown" ;;
+    esac
+
+    case $health in
+      1) health="Unknown" ;;
+      2) health="Good" ;;
+      3) health="Overheat" ;;
+      4) health="Dead" ;;
+      5) health="Over Voltage" ;;
+      6) health="Unspecified Failure" ;;
+      7) health="Cold" ;;
+      *) health="Unknown" ;;
+    esac
+
+    echo "  Level:     ${level:-?}%"
+    echo "  Status:    $status"
+    echo "  Health:    $health"
+    echo "  Temp:      ${temp}°C"
+  fi
+  echo
+
+  # === Storage ===
+  echo -e "${GREEN}Storage Usage${NC}"
+  local storage
+  if [[ "$rooted" == "Yes" ]]; then
+    storage=$(adb shell df -h / /storage/emulated 2>/dev/null)
+  else
+    storage=$(adb shell df -h /storage/emulated/0 2>/dev/null)
+  fi
+  if [[ -n "$storage" ]]; then
+    echo "$storage" | while IFS= read -r line; do
+      echo "  $line"
+    done
+  else
+    echo "  Failed to retrieve storage info"
+  fi
+  echo
+
+  # === Memory ===
+  echo -e "${GREEN}Memory Info${NC}"
+  local mem=$(adb shell free -h 2>/dev/null | grep Mem)
+  if [[ -n "$mem" ]]; then
+    local total=$(echo "$mem" | awk '{print $2}')
+    local used=$(echo "$mem" | awk '{print $3}')
+    local free=$(echo "$mem" | awk '{print $4}')
+    local shared=$(echo "$mem" | awk '{print $5}')
+    local buff_cache=$(echo "$mem" | awk '{print $6}')
+    echo "  total=${total}   used=${used}   free=${free}   shared=${shared}   buffer/cache=${buff_cache}"
+  else
+    echo "  Failed to retrieve memory info"
+  fi
+  echo
+
+  # === Screen ===
+  echo -e "${GREEN}Screen Info${NC}"
+  local resolution=$(adb shell wm size 2>/dev/null | grep "Physical size" | cut -d: -f2 | xargs)
+  echo "  Resolution: ${resolution:-Unknown}"
+  echo
+
+  # === Network ===
+  echo -e "${GREEN}Network Info${NC}"
+  local netstats=$(adb shell dumpsys netstats 2>/dev/null)
+  if [[ -z "$netstats" ]]; then
+    echo "  Failed to retrieve network info"
+  else
+    # Try to capture the line with wlan0 interface (this could vary depending on your device)
+    local ssid_line=$(echo "$netstats" | grep -E 'iface=wlan0' | head -n 1)
+
+    # Extract the wifi name from the wifiNetworkKey field
+    local wifi_name=$(echo "$ssid_line" | grep -oP 'wifiNetworkKey="([^"]+)"' | cut -d'"' -f2)
+
+    # If WiFi name is still empty, set it to "Not connected"
+    if [[ -z "$wifi_name" ]]; then
+      wifi_name="Not connected"
+    fi
+
+    # Check IP address for Wi-Fi (wlan0)
+    local ip_address=$(adb shell ip -f inet addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | tr -d '\r')
+
+    # If no IP address from wlan0, check for ethernet (eth0)
+    if [[ -z "$ip_address" ]]; then
+      ip_address=$(adb shell ip -f inet addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | tr -d '\r')
+    fi
+
+    # If no IP address is found, set it to "Not connected"
+    if [[ -z "$ip_address" ]]; then
+      ip_address="Not connected"
+    fi
+
+    # Output the Wi-Fi name and IP address
+    echo "  WiFi Name: ${wifi_name}"
+    echo "  IP Address: ${ip_address}"
+  fi
+  echo
+
+  # === Hardware ===
+  echo -e "${GREEN}Hardware Info${NC}"
+  local cpu_info=$(adb shell cat /proc/cpuinfo 2>/dev/null)
+  local hardware=$(echo "$cpu_info" | grep 'Hardware' | head -n1 | cut -d: -f2 | xargs)
+  if [[ -z "$hardware" ]]; then
+    hardware=$(adb shell getprop ro.hardware 2>/dev/null | tr -d '\r' | xargs)
+  fi
+  local processor=$(echo "$cpu_info" | grep 'Processor' | head -n1 | cut -d: -f2 | xargs)
+  local cores=$(echo "$cpu_info" | grep -c '^processor')
+  [[ $cores -eq 0 ]] && cores="Unknown"
+  local cpu="${processor:-${hardware:-Unknown}} (${cores} cores)"
+
+  local gpu_info=$(adb shell dumpsys SurfaceFlinger 2>/dev/null | grep 'GLES: ' | head -n1)
+  local renderer=$(echo "$gpu_info" | cut -d ':' -f2- | cut -d ',' -f1 | xargs)
+  local version=$(echo "$gpu_info" | cut -d ',' -f2 | xargs)
+  local gpu="${renderer:-Unknown}"
+  if [[ -n "$version" ]]; then
+    gpu="$gpu (${version})"
+  fi
+  if [[ -z "$renderer" ]]; then
+    local opengles_version=$(adb shell getprop ro.opengles.version 2>/dev/null | tr -d '\r' | xargs)
+    if [[ "$opengles_version" =~ ^[0-9]+$ ]]; then
+      local major=$((opengles_version >> 16))
+      local minor=$((opengles_version & 0xFFFF))
+      gpu="OpenGL ES ${major}.${minor}"
+    else
+      gpu="Unknown"
+    fi
+  fi
+
+  echo "  CPU:  $cpu"
+  echo "  GPU:  $gpu"
+  echo
+
+  read -r -p "Press Enter to return..."
+}
+
+# =============================================================================
+# APP MANAGEMENT FUNCTIONS
+# =============================================================================
+
+# === App Management ===
+install_apps() {
+  local modified_count=0
+  read -r -p "Path to APK or folder: " path
+  # Strip surrounding single or double quotes from path if present
+  if [[ $path == \'*\' ]] && [[ $path == *\' ]]; then
+    path="${path:1:-1}"
+  elif [[ $path == \"*\" ]] && [[ $path == *\" ]]; then
+    path="${path:1:-1}"
+  fi
+  # Sanitize: check for forbidden characters
+  if echo "$path" | grep -q '[[:cntrl:]*?\[\]{}~|;&'"'"'"`$;]'; then
+    echo -e "${RED}Path contains invalid characters (*, ?, [, ], {, }, ~, |, ;, &, ', \" , \`, $, or control characters): $path${NC}"
+    return 1
+  fi
+  check_device_connection || return 1
+  # Check device Android version for install compatibility
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
+  if [[ "$sdk" -ge 36 ]]; then
+    echo -e "${YELLOW}Note: On Android 16+, apps targeting SDK <25 may not install.${NC}"
+  elif [[ "$sdk" -ge 35 ]]; then
+    echo -e "${YELLOW}Note: On Android 15, apps targeting SDK <24 may not install.${NC}"
+  fi
+  if [[ -f "$path" ]]; then
+    # Single APK
+    if [[ ! "$path" == *.apk ]]; then
+      echo -e "${YELLOW}Warning: File does not end with .apk extension.${NC}"
+    fi
+    timeout 300 adb install "$path" || {
+      echo -e "${RED}Failed to install $path${NC}"
+      return 1
+    }
+    echo -e "${GREEN}Successfully installed $path${NC}"
+    ((modified_count++))
+    read -r -p "Press Enter to return..."
+  elif [[ -d "$path" ]]; then
+    # APK folder
+    mapfile -d '' -t files < <(find "$path" -maxdepth 1 -name '*.apk' -type f -print0)
+    if [[ ${#files[@]} -eq 0 ]]; then
+      echo -e "${RED}No APK files found in $path${NC}"
+      return 1
+    fi
+    for f in "${files[@]}"; do
+      echo -e "${GREEN}Installing $f...${NC}"
+      timeout 300 adb install "$f" || { echo -e "${RED}Failed to install $f${NC}"; continue; }
+      echo -e "${GREEN}Successfully installed $f${NC}"
+      ((modified_count++))
+    done
+    read -r -p "Press Enter to return..."
+  else
+    echo -e "${RED}Not a valid file or folder: $path${NC}"
+    return 1
+  fi
+}
+
+# Simple uninstall function with root check
+uninstall_apps() {
+  check_device_connection || return 1
+  local use_root=false
+  if is_rooted; then
+    read -r -p "Device is rooted. Use root privileges for global operation? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+    fi
+  fi
+  local all_packages=()
+  while IFS= read -r line; do all_packages+=("$line"); done < <(adb shell pm list packages | sed 's/package://g' | tr -d '\r')
+  if [[ ${#all_packages[@]} -eq 0 ]]; then
+    echo -e "${RED}Failed to list packages${NC}"
+    return 1
+  fi
+  local disabled=$(adb shell pm list packages -d | sed 's/package://g' | tr -d '\r' || echo "")
+  echo -e "${GREEN}Enabled:${NC}"
+  for pkg in "${all_packages[@]}"; do
+    if ! echo "$disabled" | grep -q "^$pkg$"; then
+      echo " $pkg"
+    fi
+  done
+  echo -e "${GREEN}Disabled:${NC}"
+  for pkg in "${all_packages[@]}"; do
+    if echo "$disabled" | grep -q "^$pkg$"; then
+      echo " $pkg"
+    fi
+  done
+  read -r -p "Enter package name(s) to uninstall (space separated for multiple): " sel
+  if [[ -z "$sel" ]]; then
+    echo -e "${GREEN}No selection made.${NC}"
+    return 0
+  fi
+  local selected=()
+  for pkg in $sel; do
+    if printf '%s\n' "${all_packages[@]}" | grep -q "^$pkg$"; then
+      selected+=("$pkg")
+    else
+      echo -e "${YELLOW}Invalid package: $pkg (skipping)${NC}"
+    fi
+  done
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid selections.${NC}"
+    return 1
+  fi
+  echo -e "${YELLOW}Selected package(s) to uninstall:${NC}"
+  for pkg in "${selected[@]}"; do
+    echo " $pkg"
+  done
+  read -r -p "Confirm uninstallation of these ${#selected[@]} package(s)? (y/N): " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Uninstallation canceled.${NC}"
+    return 0
+  fi
+  local success_count=0
+  for pkg in "${selected[@]}"; do
+    # Clear data and cache before uninstall
+    if $use_root; then
+      adb shell su -c "pm clear \"$pkg\"" && echo -e "${GREEN}Cleared data for $pkg${NC}" || echo -e "${YELLOW}Failed to clear data for $pkg (continuing)${NC}"
+    else
+      adb shell pm clear --user 0 "$pkg" && echo -e "${GREEN}Cleared data for $pkg${NC}" || echo -e "${YELLOW}Failed to clear data for $pkg (continuing)${NC}"
+    fi
+    if $use_root; then
+      adb shell su -c "pm uninstall \"$pkg\""
+    else
+      adb shell pm uninstall --user 0 "$pkg"
+    fi
+    # Check if the package is really uninstalled
+    local check_cmd="adb shell pm list packages"
+    if ! $use_root; then
+      check_cmd="$check_cmd --user 0"
+    fi
+    if eval "$check_cmd | grep -q \"^package:$pkg$\""; then
+      echo -e "${RED}Failed to uninstall $pkg (package is still installed)${NC}"
+    else
+      if $use_root; then
+        echo -e "${GREEN}Globally uninstalled $pkg${NC}"
+      else
+        echo -e "${GREEN}Uninstalled $pkg for current user.${NC}"
+      fi
+      ((success_count++))
+    fi
+  done
+  echo -e "${GREEN}Successfully processed $success_count package(s).${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+# Enable/Disable app (without root, works for user apps and some system apps)
+enable_disable_app() {
+  check_device_connection || return 1
+  local use_root=false
+  if is_rooted; then
+    read -r -p "Device is rooted. Use root privileges for global operation? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+    fi
+  fi
+  local all_packages=()
+  while IFS= read -r line; do all_packages+=("$line"); done < <(adb shell pm list packages | sed 's/package://g' | tr -d '\r')
+  if [[ ${#all_packages[@]} -eq 0 ]]; then
+    echo -e "${RED}Failed to list packages${NC}"
+    return 1
+  fi
+  local disabled=$(adb shell pm list packages -d | sed 's/package://g' | tr -d '\r' || echo "")
+  echo -e "${GREEN}Enabled:${NC}"
+  for pkg in "${all_packages[@]}"; do
+    if ! echo "$disabled" | grep -q "^$pkg$"; then
+      echo " $pkg"
+    fi
+  done
+  echo -e "${GREEN}Disabled:${NC}"
+  for pkg in "${all_packages[@]}"; do
+    if echo "$disabled" | grep -q "^$pkg$"; then
+      echo " $pkg"
+    fi
+  done
+  read -r -p "Enter exact package names to modify (space separated for multiple): " sel
+  if [[ -z "$sel" ]]; then
+    echo -e "${GREEN}No selection made.${NC}"
+    return 0
+  fi
+  local selected=()
+  for name in $sel; do
+    if printf '%s\n' "${all_packages[@]}" | grep -q "^$name$"; then
+      selected+=("$name")
+    else
+      echo -e "${YELLOW}Invalid package: $name (skipping)${NC}"
+    fi
+  done
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid selections.${NC}"
+    return 1
+  fi
+  echo -e "${YELLOW}Selected packages:${NC}"
+  for pkg in "${selected[@]}"; do
+    echo " $pkg"
+  done
+  echo -e "1) Enable\n2) Disable"
+  read -r -p "Choice for all selected: " action
+  local modified_count=0
+  case $action in
+    1)
+      for pkg in "${selected[@]}"; do
+        if $use_root; then
+          adb shell su -c "pm enable \"$pkg\"" || {
+            echo -e "${RED}Failed to enable $pkg${NC}"
+            continue
+          }
+        else
+          adb shell pm enable --user 0 "$pkg" || {
+            echo -e "${RED}Failed to enable $pkg (may require root or system-level access)${NC}"
+            continue
+          }
+        fi
+        # Check if the package is really enabled
+        if adb shell pm list packages -e | grep -q "^package:$pkg$"; then
+          echo -e "${GREEN}Successfully enabled $pkg${NC}"
+          ((modified_count++))
+        else
+          echo -e "${RED}Failed to enable $pkg (still appears disabled)${NC}"
+        fi
+      done
+      ;;
+    2)
+      for pkg in "${selected[@]}"; do
+        if $use_root; then
+          adb shell su -c "pm disable \"$pkg\"" || {
+            echo -e "${RED}Failed to disable $pkg${NC}"
+            continue
+          }
+        else
+          adb shell pm disable-user --user 0 "$pkg" || {
+            echo -e "${RED}Failed to disable $pkg${NC}"
+            continue
+          }
+        fi
+        # Check if the package is really disabled
+        if adb shell pm list packages -d | grep -q "^package:$pkg$"; then
+          echo -e "${GREEN}Successfully disabled $pkg${NC}"
+          ((modified_count++))
+        else
+          echo -e "${RED}Failed to disable $pkg (still appears enabled)${NC}"
+        fi
+      done
+      ;;
+    *)
+      echo -e "${RED}Invalid choice.${NC}"
+      return 1
+      ;;
+  esac
+  echo -e "${GREEN}Modified $modified_count package(s).${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+
+delete_app_data_cache() {
+  check_device_connection || return 1
+
+  local use_root=false
+  local root_detected=false
+  if adb shell "su -c 'echo rooted'" 2>/dev/null | grep -q 'rooted'; then
+    root_detected=true
+  fi
+  if $root_detected; then
+    read -r -p "Device is rooted. Use root privileges for global operation? (y/N): " choice
+    if [[ "$choice" =~ ^[Yy]$ ]]; then
+      use_root=true
+    fi
+  fi
+
+  echo -e "${GREEN}Enabled packages:${NC}"
+  adb shell pm list packages -e | sed 's/package://g' | tr -d '\r' | sort || {
+    echo -e "${RED}Failed to list enabled packages${NC}"
+    return 1
+  }
+
+  echo -e "${GREEN}Disabled packages:${NC}"
+  adb shell pm list packages -d | sed 's/package://g' | tr -d '\r' | sort || {
+    echo -e "${RED}Failed to list disabled packages${NC}"
+    return 1
+  }
+
+  read -r -p "Enter package names to delete data and cache (space separated for multiple): " input
+  if [[ -z "$input" ]]; then
+    echo -e "${GREEN}No packages entered. Operation canceled.${NC}"
+    return 0
+  fi
+
+  IFS=' ' read -r -a selected <<< "$input"
+
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid selections.${NC}"
+    return 1
+  fi
+
+  echo -e "${YELLOW}Selected packages to delete data/cache:${NC}"
+  for pkg in "${selected[@]}"; do
+    echo "  $pkg"
+  done
+
+  read -r -p "This will delete ALL data and cache for these ${#selected[@]} packages (user 0). Confirm? (y/N): " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Operation canceled.${NC}"
+    return 0
+  fi
+
+  local cleared_count=0
+  for pkg in "${selected[@]}"; do
+    if $use_root; then
+      if adb shell su -c "pm clear \"$pkg\"" &>/dev/null || adb shell su -c "rm -rf /data/data/\"$pkg\"/*" &>/dev/null; then
+        ((cleared_count++))
+        echo -e "${GREEN}Data and cache globally deleted for $pkg.${NC}"
+      else
+        echo -e "${RED}Failed to clear data for $pkg.${NC}"
+      fi
+    else
+      if adb shell pm clear --user 0 "$pkg" &>/dev/null; then
+        ((cleared_count++))
+        echo -e "${GREEN}Data and cache deleted for $pkg (user 0).${NC}"
+      else
+        echo -e "${RED}Failed to clear data for $pkg (permission/user issue or command not supported)${NC}"
+        if adb shell "rm -rf /data/data/$pkg/cache/*" &>/dev/null; then
+          echo -e "${YELLOW}Fallback: Only cache cleared for $pkg.${NC}"
+          ((cleared_count++))
+        else
+          echo -e "${RED}Failed to clear cache as fallback for $pkg.${NC}"
+        fi
+      fi
+    fi
+  done
+  echo -e "${GREEN}Cleared $cleared_count package(s).${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+cache_clear() {
+    # Check for root access by attempting to run 'su -c id'
+    if adb shell su -c id &>/dev/null; then
+        echo "Root access detected."
+        read -p "Do you want to use root for cache clearing? (y/n): " use_root
+        if [[ "$use_root" == "y" || "$use_root" == "Y" ]]; then
+            # Root method: Clear cache using root privileges
+            if adb shell su -c "rm -rf /data/cache/* /data/dalvik-cache/*" &>/dev/null; then
+                echo "Done"
+            else
+                echo "Failed"
+            fi
+        else
+            # Non-root method: Use pm trim-caches
+            if adb shell pm trim-caches 999G &>/dev/null; then
+                echo "Done"
+            else
+                echo "Failed"
+            fi
+        fi
+    else
+        # No root access, use non-root method
+        if adb shell pm trim-caches 999G &>/dev/null; then
+            echo "Done"
+        else
+            echo "Failed"
+        fi
+    fi
+    read -p "Press Enter to return"
+}
+
+# =============================================================================
+# FILE MANAGEMENT FUNCTIONS
+# =============================================================================
+
+# pull and push function
+pull_file() {
+  check_device_connection || return 1
+
+  local use_root=false
+  local search_paths="/storage/emulated/0/"
+  local search_desc="In: /storage/emulated/0/"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  read -r -p "Enter filename to search (use * for wildcard, e.g. '*.txt'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No filename provided.${NC}"
+    return 1
+  fi
+  if [[ ! "$fname" == *'*'* ]]; then
+    fname="*${fname}*"
+  fi
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\''/g")
+
+  echo -e "${GREEN}Searching for files matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
+
+  local results=()
+  if $use_root; then
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "su -c \"find $search_paths -iname '$fname_escaped' -type f 2>/dev/null\"" | tr -d '\r')
+  else
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "for path in $search_paths; do if [ -d \"\$path\" ]; then find \"\$path\" -iname '$fname_escaped' -type f 2>/dev/null; fi; done" | tr -d '\r')
+  fi
+
+  if [[ ${#results[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}file cant be found press enter to return${NC}"
+    read -r -p ""
+    return 1
+  fi
+
+  echo -e "${GREEN}Found ${#results[@]} file(s):${NC}"
+  for i in "${!results[@]}"; do
+    echo "$((i+1))) ${results[i]}"
+  done
+  read -r -p "Select numbers to pull (space separated, or 'all'): " sel
+  if [[ -z "$sel" ]]; then
+    echo -e "${GREEN}No selection made.${NC}"
+    return 0
+  fi
+  local selected=()
+  if [[ "$sel" == "all" ]]; then
+    selected=("${results[@]}")
+  else
+    for num in $sel; do
+      if [[ $num =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#results[@]} )); then
+        selected+=("${results[$((num-1))]}")
+      else
+        echo -e "${YELLOW}Invalid number: $num (skipping)${NC}"
+      fi
+    done
+  fi
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid selections.${NC}"
+    return 1
+  fi
+  read -r -p "Local destination directory (default: .): " dst
+  dst="${dst:-.}"
+  if [[ ! -d "$dst" ]]; then
+    echo -e "${RED}Destination is not a directory: $dst${NC}"
+    return 1
+  fi
+  local pulled_count=0
+  for path in "${selected[@]}"; do
+    local base=$(basename "$path")
+    local local_path="$dst/$base"
+    echo -e "${GREEN}Pulling $path to $local_path...${NC}"
+    if $use_root; then
+      adb shell "su -c 'cat \"$path\" 2>/dev/null'" > "$local_path"
+      if [[ $? -eq 0 && -s "$local_path" ]]; then
+        ((pulled_count++))
+        if [[ -f "$local_path" && -s "$local_path" ]]; then
+          echo -e "${GREEN}Successfully pulled $path and verified it exists locally.${NC}"
+        else
+          echo -e "${RED}Pulled $path but verification failed.${NC}"
+        fi
+      else
+        echo -e "${RED}Failed to pull $path${NC}"
+        rm -f "$local_path"
+      fi
+    else            # Built-in check: Verify the folder exists on the device
+      if timeout 300 adb pull "$path" "$local_path" >/dev/null 2>&1; then
+        ((pulled_count++))
+        if [[ -f "$local_path" && -s "$local_path" ]]; then
+          echo -e "${GREEN}Successfully pulled $path and verified it exists locally.${NC}"
+        else
+          echo -e "${RED}Pulled $path but verification failed.${NC}"
+        fi
+      else
+        echo -e "${RED}Failed to pull $path${NC}"
+      fi
+    fi
+  done
+  echo -e "${GREEN}Pulled $pulled_count file(s) successfully.${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+# push file to to device
+push_file() {
+  check_device_connection || return 1
+
+  local use_root=false
+  if is_rooted; then
+    read -r -p "Device is rooted. Use root privileges to push (allows restricted areas)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+    fi
+  fi
+
+  read -r -p "Local file paths (space-separated, quote paths with spaces): " src
+  if [[ -z "$src" ]]; then
+    return 1
+  fi
+
+  # Parse files using eval to handle quoted paths
+  local files=()
+  if ! eval "files=($src)" 2>/dev/null; then
+    echo -e "${RED}Error parsing file paths.${NC}"
+    return 1
+  fi
+  if [ ${#files[@]} -eq 0 ]; then
+    echo -e "${RED}No valid file paths provided.${NC}"
+    return 1
+  fi
+
+  # Validate files exist
+  local valid_files=()
+  for file in "${files[@]}"; do
+    if [[ -f "$file" ]]; then
+      valid_files+=("$file")
+    else
+      echo -e "${RED}Local file not found: $file${NC}"
+    fi
+  done
+  if [ ${#valid_files[@]} -eq 0 ]; then
+    return 1
+  fi
+  files=("${valid_files[@]}")
+
+  read -r -p "Remote destination (default: /storage/emulated/0/Download/): " dst
+
+  if [[ -z "$dst" ]]; then
+    dst="/storage/emulated/0/Download/"
+  fi
+
+  # For multiple files, ensure destination is a directory
+  if [ ${#files[@]} -gt 1 ] && [[ ! "$dst" =~ /$ ]]; then
+    dst="${dst}/"
+    echo -e "${YELLOW}Appended / to destination for multiple files.${NC}"
+  fi
+
+  if [[ ! "$dst" =~ ^/[a-zA-Z0-9_/.~-]+/?$ ]]; then
+    echo -e "${RED}Invalid remote destination.${NC}"
+    return 1
+  fi
+
+  # Suggest using /storage/emulated/0/ instead of /sdcard
+  if [[ "$dst" == "/sdcard/"* ]]; then
+    echo -e "${YELLOW}Note: /sdcard is a symlink. Using /storage/emulated/0/ is more reliable.${NC}"
+  fi
+
+  echo -e "${GREEN}Pushing ${#files[@]} files to $dst...${NC}"
+  local all_success=true
+  local i=0
+  for file in "${files[@]}"; do
+    i=$((i + 1))
+    local basename_file=$(basename "$file")
+    local remote_path="$dst"
+    if [[ "$dst" =~ /$ ]] || [ ${#files[@]} -gt 1 ]; then
+      remote_path="${dst}${basename_file}"
+    fi
+
+    echo -e "${GREEN}Pushing $file -> $remote_path...${NC}"
+    local push_success=false
+    if $use_root; then
+      local temp_path="/data/local/tmp/push_$$_${i}_${basename_file}"
+      if adb push "$file" "$temp_path" && adb shell su -c "cp -f \"$temp_path\" \"$remote_path\"" && adb shell su -c "rm -f \"$temp_path\""; then
+        push_success=true
+      else
+        echo -e "${RED}Failed to push $file using root${NC}"
+        adb shell su -c "rm -f \"$temp_path\"" &>/dev/null
+        all_success=false
+      fi
+    else
+      if timeout 300 adb push "$file" "$remote_path"; then
+        push_success=true
+      else
+        echo -e "${RED}Failed to push $file${NC}"
+        all_success=false
+      fi
+    fi
+
+    if $push_success; then
+      echo -e "${GREEN}Verifying file presence on device...${NC}"
+
+      local file_exists=false
+      if $use_root; then
+        if adb shell su -c "[ -f \"$remote_path\" ]"; then
+          file_exists=true
+        fi
+      else
+        if adb shell "[ -f \"$remote_path\" ]"; then
+          file_exists=true
+        fi
+      fi
+
+      if $file_exists; then
+        echo -e "${GREEN}File confirmed on device at: $remote_path${NC}"
+      else
+        echo -e "${RED}File not found on device at: $remote_path (push may have failed silently or permissions issue)${NC}"
+        all_success=false
+      fi
+    fi
+  done
+
+  if ! $all_success; then
+    return 1
+  fi
+
+  read -r -p "Press Enter to return..."
+}
+
+# Delete file from device
+delete_file() {
+  escape_single() {
+    printf '%s' "$1" | sed "s/'/'\\''/g"
+  }
+
+  check_device_connection || return 1
+
+  local use_root=false
+  local search_paths="/storage/emulated/0/"
+  local search_desc="In: /storage/emulated/0/"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  read -r -p "Enter filename to search (use * for wildcard, e.g. '*.txt'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No filename provided.${NC}"
+    return 1
+  fi
+  if [[ ! "$fname" == *'*'* ]]; then
+    fname="*${fname}*"
+  fi
+  fname_escaped=$(escape_single "$fname")
+
+  echo -e "${GREEN}Searching for files matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
+  local results=()
+  if $use_root; then
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "su -c \"find $search_paths -iname '$fname_escaped' -type f 2>/dev/null\"" | tr -d '\r')
+  else
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "for path in $search_paths; do if [ -d \"\$path\" ]; then find \"\$path\" -iname '$fname_escaped' -type f 2>/dev/null; fi; done" | tr -d '\r')
+  fi
+  if [[ ${#results[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}File couldn't be found.${NC}"
+    read -r -p "Press Enter to continue..."
+    return 1
+  fi
+  echo -e "${GREEN}Found ${#results[@]} file(s):${NC}"
+  for i in "${!results[@]}"; do
+    echo "$((i+1))) ${results[i]}"
+  done
+  read -r -p "Select numbers to delete (space separated, or 'all'): " sel
+  if [[ -z "$sel" ]]; then
+    echo -e "${GREEN}No selection made.${NC}"
+    return 0
+  fi
+  local selected=()
+  if [[ "$sel" == "all" ]]; then
+    selected=("${results[@]}")
+  else
+    for num in $sel; do
+      if [[ $num =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#results[@]} )); then
+        selected+=("${results[$((num-1))]}")
+      else
+        echo -e "${YELLOW}Invalid number: $num (skipping)${NC}"
+      fi
+    done
+  fi
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid selections.${NC}"
+    return 1
+  fi
+  echo -e "${YELLOW}Selected files to delete:${NC}"
+  for path in "${selected[@]}"; do
+    echo "  $path"
+  done
+  read -r -p "Confirm deletion of these ${#selected[@]} files? (y/N): " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Deletion canceled.${NC}"
+    return 0
+  fi
+  local deleted_count=0
+  for path in "${selected[@]}"; do
+    local path_escaped=$(escape_single "$path")
+    echo -e "${GREEN}Deleting $path...${NC}"
+    local delete_cmd="rm -f '${path_escaped}' 2>/dev/null"
+    if $use_root; then
+      delete_cmd="su -c \"$delete_cmd\""
+    fi
+    adb shell "$delete_cmd"
+    local check_cmd="[ -f '${path_escaped}' ] && echo 'exists' || echo 'deleted'"
+    if $use_root; then
+      check_cmd="su -c \"$check_cmd\""
+    fi
+    local status=$(adb shell "$check_cmd" | tr -d '\r')
+    if [[ "$status" == "deleted" ]]; then
+      ((deleted_count++))
+      echo -e "${GREEN}Successfully deleted $path${NC}"
+    else
+      echo -e "${RED}Failed to delete $path${NC}"
+    fi
+  done
+  echo -e "${GREEN}Deleted $deleted_count file(s) successfully.${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+# Pull entire folder from device
+pull_folder() {
+  check_device_connection || return 1
+
+  local use_root=false
+  local search_paths="/storage/emulated/0/"
+  local search_desc="In: /storage/emulated/0/"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  read -r -p "Enter folder name to search (use * for wildcard, e.g. '*Music*'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No folder name provided.${NC}"
+    return 1
+  fi
+  if [[ ! "$fname" == *'*'* ]]; then
+    fname="*${fname}*"
+  fi
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\''/g")
+
+  echo -e "${GREEN}Searching for folders matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
+  local results=()
+  if $use_root; then
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "su -c \"find $search_paths -iname '$fname_escaped' -type d 2>/dev/null\"" | tr -d '\r')
+  else
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "for path in $search_paths; do if [ -d \"\$path\" ]; then find \"\$path\" -iname '$fname_escaped' -type d 2>/dev/null; fi; done" | tr -d '\r')
+  fi
+  if [[ ${#results[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}folder cant be found press enter to return${NC}"
+    read -r -p ""
+    return 1
+  fi
+  echo -e "${GREEN}Found ${#results[@]} folder(s):${NC}"
+  for i in "${!results[@]}"; do
+    echo "$((i+1))) ${results[i]}"
+  done
+  read -r -p "Select numbers to pull (space separated, or 'all'): " sel
+  if [[ -z "$sel" ]]; then
+    echo -e "${GREEN}No selection made.${NC}"
+    return 0
+  fi
+  local selected=()
+  if [[ "$sel" == "all" ]]; then
+    selected=("${results[@]}")
+  else
+    for num in $sel; do
+      if [[ $num =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#results[@]} )); then
+        selected+=("${results[$((num-1))]}")
+      else
+        echo -e "${YELLOW}Invalid number: $num (skipping)${NC}"
+      fi
+    done
+  fi
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid selections.${NC}"
+    return 1
+  fi
+  read -r -p "Local destination directory (default: .): " dst
+  dst="${dst:-.}"
+  if [[ ! -d "$dst" ]]; then
+    echo -e "${RED}Destination is not a directory: $dst${NC}"
+    return 1
+  fi
+  local pulled_count=0
+  for path in "${selected[@]}"; do
+    echo -e "${GREEN}Pulling folder $path to $dst...${NC}"
+    local local_path="$dst/$(basename "$path")"
+    if $use_root; then
+      adb shell "su -c 'tar cz -C \"$(dirname \"$path\")\" \"$(basename \"$path\")\" 2>/dev/null'" | (cd "$dst"; tar xz 2>/dev/null)
+      if [[ ${PIPESTATUS[0]} -eq 0 && ${PIPESTATUS[1]} -eq 0 ]]; then
+        if [[ -d "$local_path" && "$(ls -A "$local_path")" ]]; then
+          echo -e "${GREEN}Successfully pulled $path and verified it exists locally.${NC}"
+          ((pulled_count++))
+        else
+          echo -e "${RED}Pulled $path but verification failed.${NC}"
+        fi
+      else
+        echo -e "${RED}Failed to pull $path${NC}"
+      fi
+    else
+      if timeout 300 adb pull "$path" "$dst" >/dev/null 2>&1; then
+        if [[ -d "$local_path" && "$(ls -A "$local_path")" ]]; then
+          echo -e "${GREEN}Successfully pulled $path and verified it exists locally.${NC}"
+          ((pulled_count++))
+        else
+          echo -e "${RED}Pulled $path but verification failed.${NC}"
+        fi
+      else
+        echo -e "${RED}Failed to pull $path${NC}"
+      fi
+    fi
+  done
+  echo -e "${GREEN}Pulled $pulled_count folder(s) successfully.${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+# Push entire folder to device
+push_folder() {
+  check_device_connection || return 1
+
+  local use_root=false
+  if is_rooted; then
+    read -r -p "Device is rooted. Use root privileges to push (allows restricted areas)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+    fi
+  fi
+
+  read -r -p "Local folder paths (space-separated, quote paths with spaces): " src
+  if [[ -z "$src" ]]; then
+    return 1
+  fi
+
+  # Parse folders using eval to handle quoted paths
+  local folders=()
+  if ! eval "folders=($src)" 2>/dev/null; then
+    echo -e "${RED}Error parsing folder paths.${NC}"
+    return 1
+  fi
+  if [ ${#folders[@]} -eq 0 ]; then
+    echo -e "${RED}No valid folder paths provided.${NC}"
+    return 1
+  fi
+
+  # Validate folders exist
+  local valid_folders=()
+  for folder in "${folders[@]}"; do
+    if [[ -d "$folder" ]]; then
+      valid_folders+=("$folder")
+    else
+      echo -e "${RED}Local folder not found: $folder${NC}"
+    fi
+  done
+  if [ ${#valid_folders[@]} -eq 0 ]; then
+    return 1
+  fi
+  folders=("${valid_folders[@]}")
+
+  read -r -p "Remote destination (default: /storage/emulated/0/Download/): " dst
+
+  if [[ -z "$dst" ]]; then
+    dst="/storage/emulated/0/Download/"
+  fi
+
+  # For multiple folders, ensure destination is a directory
+  if [ ${#folders[@]} -gt 1 ] && [[ ! "$dst" =~ /$ ]]; then
+    dst="${dst}/"
+    echo -e "${YELLOW}Appended / to destination for multiple folders.${NC}"
+  fi
+
+  if [[ ! "$dst" =~ ^/[a-zA-Z0-9_/.~-]+/?$ ]]; then
+    echo -e "${RED}Invalid remote destination.${NC}"
+    return 1
+  fi
+
+  if [[ "$dst" == "/sdcard/"* ]]; then
+    echo -e "${YELLOW}Note: /sdcard is a symlink. Prefer /storage/emulated/0/ for reliability.${NC}"
+  fi
+
+  echo -e "${GREEN}Pushing ${#folders[@]} folders to $dst...${NC}"
+  local all_success=true
+  local i=0
+  for folder in "${folders[@]}"; do
+    i=$((i + 1))
+
+    # Determine the target remote folder path consistently
+    local folder_name=$(basename "$folder")
+    local target
+    if [[ "$dst" == */ ]]; then
+      target="${dst}${folder_name}"
+    else
+      target="$dst"
+    fi
+
+    echo -e "${GREEN}Pushing folder: $folder -> $target...${NC}"
+    local push_success=false
+    if $use_root; then
+      local temp_dir="/data/local/tmp/push_$$_${i}_${folder_name}"
+      if adb push "$folder/." "$temp_dir" && \
+         adb shell su -c "mkdir -p \"$target\"" && \
+         adb shell su -c "cp -r \"$temp_dir/.\" \"$target/\"" && \
+         adb shell su -c "rm -rf \"$temp_dir\""; then
+        push_success=true
+      else
+        echo -e "${RED}Failed to push folder $folder using root${NC}"
+        adb shell su -c "rm -rf \"$temp_dir\"" &>/dev/null
+        all_success=false
+      fi
+    else
+      if timeout 300 adb push "$folder/." "$target"; then
+        push_success=true
+      else
+        echo -e "${RED}Failed to push folder: $folder${NC}"
+        all_success=false
+      fi
+    fi
+
+    if $push_success; then
+      # Built-in check: Verify the folder exists on the device
+      local exists=false
+      if $use_root; then
+        if adb shell su -c "[ -d \"$target\" ]" >/dev/null 2>&1; then
+          exists=true
+        fi
+      else
+        if adb shell "[ -d \"$target\" ]" >/dev/null 2>&1; then
+          exists=true
+        fi
+      fi
+
+      if $exists; then
+        echo -e "${GREEN}Successfully pushed and verified folder: $folder (exists on device at $target)${NC}"
+      else
+        echo -e "${RED}Push appeared to succeed, but verification failed: Folder not found on device at $target${NC}"
+        all_success=false
+      fi
+    fi
+  done
+
+  if ! $all_success; then
+    return 1
+  fi
+  read -r -p "Press Enter to return..."
+}
+
+# Delete folder from device (with recursive option)
+delete_folder() {
+  escape_single() {
+    printf '%s' "$1" | sed "s/'/'\\''/g"
+  }
+
+  check_device_connection || return 1
+
+  local use_root=false
+  local search_paths="/storage/emulated/0/"
+  local search_desc="In: /storage/emulated/0/"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  read -r -p "Enter folder name to search (use * for wildcard, e.g. '*Music*'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No folder name provided.${NC}"
+    return 1
+  fi
+  if [[ ! "$fname" == *'*'* ]]; then
+    fname="*${fname}*"
+  fi
+  fname_escaped=$(escape_single "$fname")
+
+  echo -e "${GREEN}Searching for folders matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
+  local results=()
+  if $use_root; then
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "su -c \"find $search_paths -iname '$fname_escaped' -type d 2>/dev/null\"" | tr -d '\r')
+  else
+    while IFS= read -r line; do results+=("$line"); done < <(adb shell "for path in $search_paths; do if [ -d \"\$path\" ]; then find \"\$path\" -iname '$fname_escaped' -type d 2>/dev/null; fi; done" | tr -d '\r')
+  fi
+  if [[ ${#results[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No folder with the name could be found.${NC}"
+    read -r -p "Press Enter..."
+    return 1
+  fi
+  echo -e "${GREEN}Found ${#results[@]} folder(s):${NC}"
+  for i in "${!results[@]}"; do
+    echo "$((i+1))) ${results[i]}"
+  done
+  read -r -p "Select numbers to delete (space separated, or 'all'): " sel
+  if [[ -z "$sel" ]]; then
+    echo -e "${GREEN}No selection made.${NC}"
+    return 0
+  fi
+  local selected=()
+  if [[ "$sel" == "all" ]]; then
+    selected=("${results[@]}")
+  else
+    for num in $sel; do
+      if [[ $num =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#results[@]} )); then
+        selected+=("${results[$((num-1))]}")
+      else
+        echo -e "${YELLOW}Invalid number: $num (skipping)${NC}"
+      fi
+    done
+  fi
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid selections.${NC}"
+    return 1
+  fi
+  echo -e "${YELLOW}Selected folders to delete:${NC}"
+  for path in "${selected[@]}"; do
+    echo "  $path"
+  done
+  read -r -p "Confirm deletion of these ${#selected[@]} folders and their contents? (y/N): " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Deletion canceled.${NC}"
+    return 0
+  fi
+  local deleted_count=0
+  for path in "${selected[@]}"; do
+    local path_escaped=$(escape_single "$path")
+    echo -e "${GREEN}Deleting folder $path...${NC}"
+    local delete_cmd="rm -rf '${path_escaped}' 2>/dev/null"
+    if $use_root; then
+      delete_cmd="su -c \"$delete_cmd\""
+    fi
+    adb shell "$delete_cmd"
+    # Built-in check to verify deletion
+    local check_cmd="[ -d '${path_escaped}' ] && echo exists || echo deleted"
+    if $use_root; then
+      check_cmd="su -c \"$check_cmd\""
+    fi
+    local status=$(adb shell "$check_cmd" | tr -d '\r')
+    if [[ "$status" == "deleted" ]]; then
+      ((deleted_count++))
+      echo -e "${GREEN}Successfully deleted $path (verified).${NC}"
+    else
+      echo -e "${RED}Failed to delete $path (still exists).${NC}"
+    fi
+  done
+  echo -e "${GREEN}Deleted $deleted_count folder(s) successfully.${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+# Search for folders on device
+find_folder() {
+  check_device_connection || return 1
+
+  local use_root=false
+  local search_paths="/storage/emulated/0/"
+  local search_desc="In: /storage/emulated/0/"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (expanded to entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  read -r -p "Enter folder name to search (use * for wildcard, e.g. '*Music*'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No folder name provided.${NC}"
+    return 1
+  fi
+
+  # Automatically add wildcards if not present for substring search
+  if [[ ! "$fname" == *'*'* ]]; then
+    fname="*${fname}*"
+  fi
+
+  # Sanitize fname for find command (escape special chars for single-quoted context)
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\''/g")
+
+  echo -e "${GREEN}Searching for folders matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
+
+  local results
+  if $use_root; then
+    results=$(adb shell "su -c \"find / -iname '$fname_escaped' -type d 2>/dev/null\"" | tr -d '\r')
+  else
+    results=$(adb shell "for path in $search_paths; do
+                        if [ -d \"\$path\" ]; then
+                          find \"\$path\" -iname '$fname_escaped' -type d 2>/dev/null
+                        fi
+                      done" | tr -d '\r')
+  fi
+
+  if [[ -n "$results" ]]; then
+    echo "$results"
+    local count=$(echo "$results" | wc -l)
+    echo -e "${GREEN}Search complete. Found $count folder(s).${NC}"
+  else
+    echo -e "${YELLOW}No matching folders found.${NC}"
+  fi
+
+  read -r -p "Press enter to return to the menu..."
+}
+
+# Search for files on device
+find_file() {
+  check_device_connection || return 1
+
+  local use_root=false
+  local search_paths="/storage/emulated/0/"
+  local search_desc="In: /storage/emulated/0/"
+
+  if is_rooted; then
+    read -r -p "Device is rooted. Search with root privileges (expanded to entire device)? (y/n): " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+      use_root=true
+      search_paths="/"
+      search_desc="In: entire device (using root privileges)"
+    fi
+  fi
+
+  read -r -p "Enter filename to search (use * for wildcard, e.g. '*.mp4'): " fname
+  if [[ -z "$fname" ]]; then
+    echo -e "${RED}No filename provided.${NC}"
+    return 1
+  fi
+
+  # Automatically add wildcards if not present for substring search
+  if [[ ! "$fname" == *'*'* ]]; then
+    fname="*${fname}*"
+  fi
+
+  # Sanitize fname for find command (escape special chars for single-quoted context)
+  fname_escaped=$(printf '%s' "$fname" | sed "s/'/'\\''/g")
+
+  echo -e "${GREEN}Searching for files matching: $fname${NC}"
+  echo -e "${GREEN}$search_desc${NC}"
+
+  local results
+  if $use_root; then
+    results=$(adb shell "su -c \"find / -iname '$fname_escaped' -type f 2>/dev/null\"" | tr -d '\r')
+  else
+    results=$(adb shell "for path in $search_paths; do
+                        if [ -d \"\$path\" ]; then
+                          find \"\$path\" -iname '$fname_escaped' -type f 2>/dev/null
+                        fi
+                      done" | tr -d '\r')
+  fi
+
+  if [[ -n "$results" ]]; then
+    echo "$results"
+    local count=$(echo "$results" | wc -l)
+    echo -e "${GREEN}Search complete. Found $count file(s).${NC}"
+  else
+    echo -e "${YELLOW}No matching files found.${NC}"
+  fi
+
+  read -r -p "Press enter to return to menu..."
+}
+
+# =============================================================================
+# DEVELOPER TOOLS FUNCTIONS
+# =============================================================================
+
+logcat_viewer() {
+  read -r -p "Filter (optional, prefix for example logcat:*:E for native logcat filter spec): " filter
+  check_device_connection || return 1
+  echo "Press Ctrl+C to stop viewing logs and return to the menu."
+  trap 'echo -e "${RED}Logcat interrupted. Returning to menu.${NC}"; trap - SIGINT; return 0' SIGINT
+
+  if [[ -z "$filter" ]]; then
+    adb logcat || { echo -e "${RED}Failed to display logcat${NC}"; trap - SIGINT; return 1; }
+  elif [[ "$filter" == logcat:* ]]; then
+    filter_spec="${filter#logcat:}"
+    filter_spec="${filter_spec##[[:space:]]*}"
+
+    if [[ -z "$filter_spec" ]]; then
+      adb logcat || { echo -e "${RED}Failed to display logcat${NC}"; trap - SIGINT; return 1; }
+    else
+      adb logcat $filter_spec || { echo -e "${RED}Failed to display filtered logcat${NC}"; trap - SIGINT; return 1; }
+    fi
+  else
+    adb logcat | grep -i -E --color=auto -- "$filter" || { echo -e "${RED}Failed to display filtered logcat${NC}"; trap - SIGINT; return 1; }
+  fi
+  trap - SIGINT
+}
+
+logcat_save() {
+  # Check write permission in current directory
+  if [[ ! -w . ]]; then
+    echo -e "${RED}No write permission in current directory: $(pwd)${NC}"
+    return 1
+  fi
+
+  # Generate a unique filename safely
+  local fname
+  fname="logcat_$(date +%Y%m%d_%H%M%S)_$$.txt"
+
+  # Validate generated filename
+  if ! [[ "$fname" =~ ^[a-zA-Z0-9_/.~-]+$ ]]; then
+    echo -e "${RED}Generated filename contains invalid characters: $fname${NC}"
+    return 1
+  fi
+
+  # Confirm file can be created
+  if ! touch "$fname" 2>/dev/null; then
+    echo -e "${RED}Cannot create file: $fname${NC}"
+    return 1
+  fi
+
+  check_device_connection || return 1
+
+  echo -e "${GREEN}Saving logcat to $fname.${NC}"
+  echo -e "${GREEN}Confirm on device if prompted...${NC}"
+
+  if adb logcat -d > "$fname" 2>/dev/null; then
+    if [[ -s "$fname" ]]; then
+      echo -e "${GREEN}Logcat saved to $fname${NC}"
+    else
+      echo -e "${RED}Logcat saved but file is empty${NC}"
+      rm -f "$fname"
+      return 1
+    fi
+  else
+    echo -e "${RED}Failed to save logcat to $fname${NC}"
+    rm -f "$fname"
+    return 1
+  fi
+  read -r -p "Press Enter to return..."
+}
+
+clear_logcat() {
+  check_device_connection || return 1
+  if adb logcat -c; then
+    echo -e "${GREEN}Logcat cleared successfully.${NC}"
+  else
+    echo -e "${RED}Failed to clear logcat.${NC}"
+    return 1
+  fi
+  read -r -p "Press Enter to return..."
+}
+
+shell_access() { 
+  check_device_connection || return 1
+  adb shell || { echo -e "${RED}Failed to open shell${NC}"; return 1; }; 
+}
+
+screenshot() {
+  # Check write permission in script directory
+  if [[ ! -w "$SCRIPT_DIR" ]]; then
+    echo -e "${RED}No write permission in script directory: $SCRIPT_DIR${NC}"
+    return 1
+  fi
+
+  # Generate unique filename
+  local fname="$SCRIPT_DIR/screenshot_$(date +%Y%m%d_%H%M%S)_$$.png"
+
+  check_device_connection || return 1
+
+  echo -e "${GREEN}Capturing screenshot...${NC}"
+
+  # Capture and save
+  if adb exec-out screencap -p > "$fname" 2>/dev/null; then
+    # Check if file is valid (non-zero size)
+    if [[ -s "$fname" ]]; then
+      echo -e "${GREEN}Screenshot saved as $fname${NC}"
+    else
+      echo -e "${RED}Screenshot failed: file is empty${NC}"
+      rm -f "$fname"
+      return 1
+    fi
+  else
+    echo -e "${RED}Failed to capture screenshot${NC}"
+    rm -f "$fname"
+    return 1
+  fi
+  read -r -p "Press Enter to return..."
+}
+
+custom_adb_command() {
+  check_device_connection || return 1
+  read -r -p "Enter ADB command (without 'adb ' prefix, e.g. 'shell ls /sdcard'): " cmd
+  if [[ -z "$cmd" ]]; then
+    echo -e "${RED}No command entered.${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Executing: adb $cmd${NC}"
+  adb $cmd || { echo -e "${RED}Command failed.${NC}"; return 1; }
+  read -r -p "Press Enter to return..."
+}
+
+# =============================================================================
+# CUSTOM SETTINGS FUNCTIONS
+# =============================================================================
+
+tv_tweaks() {
+  check_device_connection || return 1
+  local sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' | xargs)
+  if [[ "$sdk" -lt 28 ]]; then
+    echo -e "${RED}This function is only for Android 9 (API 28) and above. Your device is API $sdk.${NC}"
+    return 1
+  fi
+  echo -e "${YELLOW}Detected Android API level: $sdk.${NC}"
+  echo -e "${RED}Warning: This could damage your device. Use at your own risk.${NC}"
+  read -r -p "Do you want to proceed? (y/n): " confirm
+  case "$confirm" in
+    y|Y ) ;;
+    n|N ) echo -e "${YELLOW}Returning to menu.${NC}"; return 0 ;;
+    * ) echo -e "${YELLOW}Invalid choice. Returning to menu.${NC}"; return 0 ;;
+  esac
+  echo -e "${GREEN}Applying TV tweaks for performance improvements...${NC}"
+  echo -e "${YELLOW}This may take a while.${NC}"
+  local success_count=0
+  local total=0
+  # Background dexopt job (supported on Android 8+, safe for TV to pre-optimize apps)
+  ((total++))
+  if adb shell cmd package bg-dexopt-job &>/dev/null; then
+    ((success_count++))
+    echo -e "${GREEN}Background dexopt job completed.${NC}"
+  else
+    echo -e "${YELLOW}Failed to run background dexopt (may not be supported).${NC}"
+  fi
+  # Animation tweaks (disabled for maximum snappiness on TV)
+  ((total++))
+  if adb shell settings put global window_animation_scale 0.0 &>/dev/null; then
+    ((success_count++))
+    echo -e "${GREEN}Disabled window animations.${NC}"
+  else
+    echo -e "${YELLOW}Failed to disable window animations${NC}";
+  fi
+  ((total++))
+  if adb shell settings put global transition_animation_scale 0.0 &>/dev/null; then
+    ((success_count++))
+    echo -e "${GREEN}Disabled transition animations.${NC}"
+  else
+    echo -e "${YELLOW}Failed to disable transition animations${NC}";
+  fi
+  ((total++))
+  if adb shell settings put global animator_duration_scale 0.0 &>/dev/null; then
+    ((success_count++))
+    echo -e "${GREEN}Disabled animator duration.${NC}"
+  else
+    echo -e "${YELLOW}Failed to disable animator duration${NC}";
+  fi
+  # Android 12+ UI tweaks (safe for reducing visual effects on TV)
+  if [[ "$sdk" -ge 31 ]]; then
+    ((total++))
+    if adb shell settings put global disable_window_blurs 1 &>/dev/null; then
+      ((success_count++))
+      echo -e "${GREEN}Disabled window blurs.${NC}"
+    else
+      echo -e "${YELLOW}Failed to disable window blurs (may not be supported)${NC}";
+    fi
+    ((total++))
+    if adb shell settings put global accessibility_reduce_transparency 1 &>/dev/null; then
+      ((success_count++))
+      echo -e "${GREEN}Reduced transparency.${NC}"
+    else
+      echo -e "${YELLOW}Failed to reduce transparency (may not be supported)${NC}";
+    fi
+  else
+    echo -e "${YELLOW}Skipping window blurs and transparency tweaks (requires Android 12+)${NC}"
+  fi
+  # Trim app caches (safe, frees storage for better performance)
+  ((total++))
+  if adb shell pm trim-caches 999G &>/dev/null; then
+    ((success_count++))
+    echo -e "${GREEN}Trimmed app caches.${NC}"
+  else
+    echo -e "${YELLOW}Failed to trim app caches (may not be supported)${NC}";
+  fi
+  if [[ $success_count -eq $total ]]; then
+    echo -e "${GREEN}All TV tweaks applied successfully.${NC}"
+    echo -e "${GREEN}All Tweaks are successfully applied device needs a reboot press enter to reboot${NC}"
+    read -r -p ""
+    echo -e "${GREEN}Rebooting device...${NC}"
+    adb reboot
+    exit 0
+  elif [[ $success_count -gt 0 ]]; then
+    echo -e "${YELLOW}Applied $success_count out of $total tweaks (some may not be supported on your device).${NC}"
+    echo -e "${GREEN}Device needs a reboot. Press enter to reboot.${NC}"
+    read -r -p ""
+    echo -e "${GREEN}Rebooting device...${NC}"
+    adb reboot
+    exit 0
+  else
+    echo -e "${RED}Failed to apply any TV tweaks.${NC}"
+    read -r -p "Press Enter to return to menu..."
+  fi
+}
+
+dns_settings() {
+  check_device_connection || return 1
+  while true; do
+    echo -e "${GREEN}Set private DNS:${NC}"
+    # Check current private DNS mode
+    local current_mode=$(adb shell settings get global private_dns_mode 2>/dev/null | tr -d '\r')
+    local current_specifier=$(adb shell settings get global private_dns_specifier 2>/dev/null | tr -d '\r')
+    echo -e "${YELLOW}Current mode: ${current_mode:-off}${NC}"
+    echo -e "${YELLOW}Current specifier: ${current_specifier:-None}${NC}"
+    echo "1) Disable private DNS (default)"
+    echo "2) Enable Cloudflare private DNS (one.one.one.one)"
+    echo "3) Enable AdGuard private DNS (dns.adguard.com)"
+    echo "4) Enable ControlD private DNS (p2.freedns.controld.com)"
+    echo "5) Enable Quad9 private DNS (dns.quad9.net)"
+    echo "6) Enable Custom private DNS"
+    echo "7) Back"
+    read -r -p "Choose (1-7): " choice
+    case $choice in
+      1)
+        adb shell settings put global private_dns_mode off &>/dev/null
+        adb shell settings delete global private_dns_specifier &>/dev/null
+        local new_mode=$(adb shell settings get global private_dns_mode 2>/dev/null | tr -d '\r')
+        local new_specifier=$(adb shell settings get global private_dns_specifier 2>/dev/null | tr -d '\r')
+        if [[ "$new_mode" == "off" ]] && ([[ -z "$new_specifier" ]] || [[ "$new_specifier" == "null" ]]); then
+          echo -e "${GREEN}DNS has been successfully disabled. Press Enter to reboot.${NC}"
+          read -r -p ""
+          adb reboot &>/dev/null
+          echo -e "${GREEN}Rebooting device...${NC}"
+          exit 0
+        else
+          echo -e "${RED}DNS could not be set. Maybe not supported on your device.${NC}"
+          read -r -p "Press enter to return..."
+        fi
+        ;;
+      2)
+        adb shell settings put global private_dns_mode hostname &>/dev/null
+        adb shell settings put global private_dns_specifier one.one.one.one &>/dev/null
+        local new_mode=$(adb shell settings get global private_dns_mode 2>/dev/null | tr -d '\r')
+        local new_specifier=$(adb shell settings get global private_dns_specifier 2>/dev/null | tr -d '\r')
+        if [[ "$new_mode" == "hostname" ]] && [[ "$new_specifier" == "one.one.one.one" ]]; then
+          echo -e "${GREEN}DNS change was successful. Press enter to reboot.${NC}"
+          read -r -p ""
+          adb reboot &>/dev/null
+          echo -e "${GREEN}Rebooting device...${NC}"
+          exit 0
+        else
+          echo -e "${RED}DNS could not be set. Maybe not supported on your device.${NC}"
+          read -r -p "Press enter to return..."
+        fi
+        ;;
+      3)
+        adb shell settings put global private_dns_mode hostname &>/dev/null
+        adb shell settings put global private_dns_specifier dns.adguard.com &>/dev/null
+        local new_mode=$(adb shell settings get global private_dns_mode 2>/dev/null | tr -d '\r')
+        local new_specifier=$(adb shell settings get global private_dns_specifier 2>/dev/null | tr -d '\r')
+        if [[ "$new_mode" == "hostname" ]] && [[ "$new_specifier" == "dns.adguard.com" ]]; then
+          echo -e "${GREEN}DNS change was successful. Press enter to reboot.${NC}"
+          read -r -p ""
+          adb reboot &>/dev/null
+          echo -e "${GREEN}Rebooting device...${NC}"
+          exit 0
+        else
+          echo -e "${RED}DNS could not be set. Maybe not supported on your device.${NC}"
+          read -r -p "Press enter to return..."
+        fi
+        ;;
+      4)
+        adb shell settings put global private_dns_mode hostname &>/dev/null
+        adb shell settings put global private_dns_specifier p2.freedns.controld.com &>/dev/null
+        local new_mode=$(adb shell settings get global private_dns_mode 2>/dev/null | tr -d '\r')
+        local new_specifier=$(adb shell settings get global private_dns_specifier 2>/dev/null | tr -d '\r')
+        if [[ "$new_mode" == "hostname" ]] && [[ "$new_specifier" == "p2.freedns.controld.com" ]]; then
+          echo -e "${GREEN}DNS change was successful. Press enter to reboot.${NC}"
+          read -r -p ""
+          adb reboot &>/dev/null
+          echo -e "${GREEN}Rebooting device...${NC}"
+          exit 0
+        else
+          echo -e "${RED}DNS could not be set. Maybe not supported on your device.${NC}"
+          read -r -p "Press enter to return..."
+        fi
+        ;;
+      5)
+        adb shell settings put global private_dns_mode hostname &>/dev/null
+        adb shell settings put global private_dns_specifier dns.quad9.net &>/dev/null
+        local new_mode=$(adb shell settings get global private_dns_mode 2>/dev/null | tr -d '\r')
+        local new_specifier=$(adb shell settings get global private_dns_specifier 2>/dev/null | tr -d '\r')
+        if [[ "$new_mode" == "hostname" ]] && [[ "$new_specifier" == "dns.quad9.net" ]]; then
+          echo -e "${GREEN}DNS change was successful. Press enter to reboot.${NC}"
+          read -r -p ""
+          adb reboot &>/dev/null
+          echo -e "${GREEN}Rebooting device...${NC}"
+          exit 0
+        else
+          echo -e "${RED}DNS could not be set. Maybe not supported on your device.${NC}"
+          read -r -p "Press enter to return..."
+        fi
+        ;;
+      6)
+        read -r -p "Enter custom DNS hostname (e.g., dns.example.com): " custom_specifier
+        if [[ -z "$custom_specifier" ]]; then
+          echo -e "${RED}No hostname entered. Returning to menu.${NC}"
+          continue
+        fi
+        adb shell settings put global private_dns_mode hostname &>/dev/null
+        adb shell settings put global private_dns_specifier "$custom_specifier" &>/dev/null
+        local new_mode=$(adb shell settings get global private_dns_mode 2>/dev/null | tr -d '\r')
+        local new_specifier=$(adb shell settings get global private_dns_specifier 2>/dev/null | tr -d '\r')
+        if [[ "$new_mode" == "hostname" ]] && [[ "$new_specifier" == "$custom_specifier" ]]; then
+          echo -e "${GREEN}DNS change was successful. Press enter to reboot.${NC}"
+          read -r -p ""
+          adb reboot &>/dev/null
+          echo -e "${GREEN}Rebooting device...${NC}"
+          exit 0
+        else
+          echo -e "${RED}DNS could not be set. Maybe not supported on your device.${NC}"
+          read -r -p "Press enter to return..."
+        fi
+        ;;
+      7)
+        return 0
+        ;;
+      *)
+        echo -e "${RED}Invalid choice.${NC}"
+        ;;
+    esac
+  done
+}
+
+check_for_updates() {
+  check_device_connection || return 1
+  echo -e "${GREEN}Checking for updates...${NC}"
+  adb shell am start -a android.settings.SYSTEM_UPDATE_SETTINGS || { echo -e "${RED}Failed to open update settings${NC}"; return 1; }
+  echo -e "${GREEN}Update settings opened on device. Check manually.${NC}"
+  read -r -p "Press Enter to return..."
+}
+
+# =============================================================================
+# MENU FUNCTIONS
+# =============================================================================
+
+# === Menus ===
+main_menu() {
+  while true; do
+    (tput clear 2>/dev/null) || printf '\033[2J\033[H'
+    echo -e "\n${RED}Droidtool Main Menu${NC}"
+    echo -e
+    echo "1) Device Info"
+    echo "2) App Management"
+    echo "3) File Management"
+    echo "4) Custom Settings"
+    echo "5) Developer Tools"
+    echo "6) Exit"
+    read -r -p "Select category (1-6): " cat
+    case $cat in
+      1) show_device_report ;;
+      2) category_app_mgmt ;;
+      3) category_files ;;
+      4) custom_settings_menu ;;
+      5) category_dev_tools ;;
+      6) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_app_mgmt() {
+  while true; do
+    clear
+    echo -e "\n${RED}App Management:${NC}"
+    echo -e
+    echo "1) Install apps"
+    echo "2) Uninstall apps"
+    echo "3) Enable/disable apps"
+    echo "4) Delete app data and cache (per app)"
+    echo "5) Clear only cache (aio)"
+    echo "6) Back to main menu"
+    read -r -p "Choose (1-6): " c
+    case $c in
+      1) install_apps ;;
+      2) uninstall_apps ;;
+      3) enable_disable_app ;;
+      4) delete_app_data_cache ;;
+      5) cache_clear ;;
+      6) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_files() {
+  while true; do
+    clear
+    echo -e "\n${RED}File Management:${NC}"
+    echo -e
+    echo "1) Pull file from device"
+    echo "2) Pull folder from device"
+    echo "3) Push file to device"
+    echo "4) Push folder to device"
+    echo "5) Delete file from device"
+    echo "6) Delete folder from device"
+    echo "7) Search for files on device"
+    echo "8) Search for folders on device"
+    echo "9) Back to main menu"
+    read -r -p "Choose (1-9): " c
+    case $c in
+      1) pull_file ;;
+      2) pull_folder ;;
+      3) push_file ;;
+      4) push_folder ;;
+      5) delete_file ;;
+      6) delete_folder ;;
+      7) find_file ;;
+      8) find_folder ;;
+      9) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+custom_settings_menu() {
+  while true; do
+    clear
+    echo -e "\n${RED}Custom Settings:${NC}"
+    echo -e
+    echo "1) TV Tweaks"
+    echo "2) DNS Settings"
+    echo "3) Check for updates"
+    echo "4) Back to main menu"
+    read -r -p "Choose (1-4): " c
+    case $c in
+      1) tv_tweaks ;;
+      2) dns_settings ;;
+      3) check_for_updates ;;
+      4) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+category_dev_tools() {
+  while true; do
+    clear
+    echo -e "\n${RED}Developer Tools:${NC}"
+    echo -e
+    echo "1) Show logcat"
+    echo "2) Save logcat to file"
+    echo "3) Clear logcat"
+    echo "4) Open shell"
+    echo "5) Custom ADB command"
+    echo "6) Take screenshot"
+    echo "7) Back to main menu"
+    read -r -p "Choose (1-7): " c
+    case $c in
+      1) logcat_viewer ;;
+      2) logcat_save ;;
+      3) clear_logcat ;;
+      4) shell_access ;;
+      5) custom_adb_command ;;
+      6) screenshot ;;
+      7) break ;;
+      *) echo -e "${RED}Invalid choice.${NC}" ;;
+    esac
+  done
+}
+
+# =============================================================================
+# SCRIPT EXECUTION START
+# =============================================================================
+
+# === Script start ===
+echo -e "${RED}Droidtool – Android Toolkit for Linux${NC}"
+echo -e
+install_android_tools
+connection_menu
+main_menu
